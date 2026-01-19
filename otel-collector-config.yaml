@@ -1,0 +1,91 @@
+# OpenTelemetry Collector Configuration
+# This configuration is set up for testing processors and showcasing OTel capabilities
+
+receivers:
+  # OTLP receiver for traces and metrics
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch processor for better performance
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  # Resource detection processor
+  resourcedetection:
+    detectors: [env, system]
+
+  # Attributes processor - add custom attributes
+  attributes:
+    actions:
+      - key: environment
+        value: demo
+        action: upsert
+      - key: collector.version
+        value: "1.0.0"
+        action: upsert
+
+  # Resource processor to add service-specific attributes
+  resource:
+    attributes:
+      - key: telemetry.sdk.name
+        value: opentelemetry
+        action: upsert
+      - key: telemetry.sdk.language
+        value: python
+        action: upsert
+
+exporters:
+  # Debug exporter - print to console for development
+  debug:
+    verbosity: detailed
+
+  # Prometheus exporter for metrics
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: "otel_demo"
+    const_labels:
+      environment: "demo"
+
+  # OTLP exporter to Jaeger (local visualization)
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # OTLP exporter to Dynatrace
+  otlphttp/dynatrace:
+    endpoint: ${env:DT_ENDPOINT}
+    headers:
+      Authorization: "Api-Token ${env:DT_API_TOKEN}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, attributes, resource]
+      exporters: [debug, otlp/jaeger, otlphttp/dynatrace]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, attributes, resource]
+      exporters: [debug, prometheus, otlphttp/dynatrace]
+
+  # Telemetry configuration for the collector itself
+  telemetry:
+    logs:
+      level: "info"
+    metrics:
+      level: "detailed"
