@@ -1,13 +1,15 @@
-# Stateful Subtrace Processor Architecture
+# Subtrace Architecture
 
 ## Overview
 
-This document describes the architecture for stateful span processing within a **subtrace** - a logical grouping of all spans within a service for a given trace.
+This document describes the architecture for the **Subtrace pattern** - a technique for service-level real-time analytics using OpenTelemetry.
 
-The goal is to aggregate data from child spans onto the subtrace root span (service entry span), enabling:
+A **subtrace** is a logical grouping of all spans within a single service for a given trace. By aggregating child span data onto the subtrace root span, we enable:
 - Business-level failure detection even when requests technically succeed
 - N+1 query detection and database call counting
 - Deep analytics by propagating child span data to root spans
+
+> **See also:** [Subtrace Aggregator Processor Spec](./SUBTRACEAGGREGATOR_PROCESSOR_SPEC.md) for the complete configuration reference.
 
 ## Architecture Diagram
 
@@ -41,7 +43,7 @@ The goal is to aggregate data from child spans onto the subtrace root span (serv
 │                         OTEL COLLECTOR LAYER                                 │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │              Stateful Subtrace Processor (Collector)                 │   │
+│  │              subtraceaggregator Processor (Collector)               │   │
 │  │                                                                      │   │
 │  │  State Management:                                                   │   │
 │  │    - Buffer spans by subtrace.id                                    │   │
@@ -49,7 +51,7 @@ The goal is to aggregate data from child spans onto the subtrace root span (serv
 │  │    - Apply aggregations when subtrace completes                     │   │
 │  │                                                                      │   │
 │  │  Aggregation Types:                                                  │   │
-│  │    - first: First seen value                                        │   │
+│  │    - any: First encountered value (arrival order)                   │   │
 │  │    - all_distinct: All unique values (array)                        │   │
 │  │    - all: All values (array)                                        │   │
 │  │    - sum: Sum of numeric values                                     │   │
@@ -60,7 +62,6 @@ The goal is to aggregate data from child spans onto the subtrace root span (serv
 │  │    - copy_event: Copy span events to root span                      │   │
 │  │                                                                      │   │
 │  │  Completion Detection:                                               │   │
-│  │    - Root span ends (primary trigger)                               │   │
 │  │    - Timeout (configurable, default 30s)                            │   │
 │  │    - Max spans per subtrace (memory protection)                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -128,68 +129,64 @@ class SubtraceIdProcessor(SpanProcessor):
         return hash_bytes.hex()
 ```
 
-### 2. Collector-Side: Stateful Subtrace Processor
+### 2. Collector-Side: subtraceaggregator Processor
 
 **Location:** OpenTelemetry Collector processor
 
 **Responsibilities:**
-- Buffer spans by subtrace ID
-- Track root span for each subtrace
-- Apply configured aggregations
-- Emit enriched spans when subtrace completes
+- Buffer spans by `subtrace.id`
+- Track root span (where `subtrace.is_root_span == true`)
+- Apply configured aggregations using OTTL conditions
+- Emit enriched spans when subtrace completes (timeout or max spans)
 
 **Configuration Schema:**
 ```yaml
 processors:
-  subtrace:
-    # Timeout for incomplete subtraces
+  subtraceaggregator:
     timeout: 30s
-    
-    # Maximum spans to buffer per subtrace
     max_spans_per_subtrace: 1000
+    error_mode: ignore
     
-    # Aggregation rules
-    aggregations:
-      # Copy exception events to root span
-      - source_event: "exception"
-        target_event: "exception"
-        copy_attributes:
-          - "exception.type"
-        add_attributes:
-          exception.source_span_id: "${source_span_id}"
+    attribute_aggregations:
+      # Count database calls (N+1 detection)
+      - aggregation: count
+        condition: 'attributes["db.system"] != nil'
+        target: subtrace.db_call_count
       
-      # Count database calls
-      - source_attribute: "db.system"
-        target_attribute: "subtrace.db_call_count"
-        aggregation: count
+      # Sum pre-aggregated counts
+      - aggregation: sum
+        source: attributes["aggregation.count"]
+        condition: 'attributes["db.system"] != nil'
+        target: subtrace.db_call_count
       
-      # First seen loyalty status
-      - source_attribute: "customer.loyalty_status"
-        target_attribute: "subtrace.customer.loyalty_status"
-        aggregation: first
-        type: string
-      
-      # Sum of items processed
-      - source_attribute: "items.count"
-        target_attribute: "subtrace.total_items"
-        aggregation: sum
-        type: int
+      # Capture customer tier (first encountered)
+      - aggregation: any
+        source: attributes["customer.loyalty_status"]
+        target: subtrace.customer.loyalty_status
+    
+    event_aggregations:
+      # Propagate payment exceptions to root span
+      - aggregation: copy_event
+        source: exception
+        condition: 'attributes["exception.type"] == "PaymentFailedException"'
+        max_events: 5
 ```
 
 **Aggregation Types:**
 
 | Aggregation | Input Type | Output Type | Description |
 |-------------|------------|-------------|-------------|
-| `first` | any | same | First non-null value seen |
-| `last` | any | same | Last non-null value seen |
+| `any` | any | same | First encountered value (arrival order) |
 | `all` | any | array | All values (preserves duplicates) |
 | `all_distinct` | any | array | All unique values |
-| `count` | any | int | Count of non-null occurrences |
+| `count` | — | int | Count of matching spans/events |
 | `sum` | numeric | same | Sum of values |
 | `avg` | numeric | double | Average of values |
 | `min` | numeric | same | Minimum value |
 | `max` | numeric | same | Maximum value |
 | `copy_event` | event | event | Copy span events to root |
+
+> **Full specification:** [SUBTRACEAGGREGATOR_PROCESSOR_SPEC.md](./SUBTRACEAGGREGATOR_PROCESSOR_SPEC.md)
 
 ### 3. Data Flow
 
@@ -235,12 +232,11 @@ except PaymentFailedException as e:
 
 **Collector Aggregation:**
 ```yaml
-- source_event: "exception"
-  target_event: "exception"
-  copy_attributes:
-    - "exception.type"
-  add_attributes:
-    exception.source_span_id: "${source_span_id}"
+event_aggregations:
+  - aggregation: copy_event
+    source: exception
+    condition: 'attributes["exception.type"] == "PaymentFailedException"'
+    max_events: 5
 ```
 
 **Result on Root Span:**
@@ -249,7 +245,8 @@ Events:
   - name: "exception"
     attributes:
       exception.type: "PaymentFailedException"
-      exception.source_span_id: "abc123def456"
+      exception.message: "Payment declined"
+      source_span_id: "abc123def456"
 ```
 
 ### Use Case 2: Database Call Counting (N+1 Detection)
@@ -266,11 +263,21 @@ with tracer.start_as_current_span("db-query") as span:
     result = db.execute(query)
 ```
 
-**Collector Aggregation:**
+**Collector Aggregation (count spans):**
 ```yaml
-- source_attribute: "db.system"
-  target_attribute: "subtrace.db_call_count"
-  aggregation: count
+attribute_aggregations:
+  - aggregation: count
+    condition: 'attributes["db.system"] != nil'
+    target: subtrace.db_call_count
+```
+
+**Collector Aggregation (sum pre-aggregated counts):**
+```yaml
+attribute_aggregations:
+  - aggregation: sum
+    source: attributes["aggregation.count"]
+    condition: 'attributes["db.system"] != nil'
+    target: subtrace.db_call_count
 ```
 
 **Result on Root Span:**
@@ -294,10 +301,10 @@ with tracer.start_as_current_span("lookup-customer") as span:
 
 **Collector Aggregation:**
 ```yaml
-- source_attribute: "customer.loyalty_status"
-  target_attribute: "subtrace.customer.loyalty_status"
-  aggregation: first
-  type: string
+attribute_aggregations:
+  - aggregation: any
+    source: attributes["customer.loyalty_status"]
+    target: subtrace.customer.loyalty_status
 ```
 
 **Result on Root Span:**
@@ -312,48 +319,40 @@ The stateful processor must handle memory carefully:
 
 1. **Timeout:** Incomplete subtraces are flushed after configurable timeout
 2. **Max Spans:** Limit spans buffered per subtrace
-3. **Max Subtraces:** Limit total subtraces in memory
-4. **LRU Eviction:** Evict oldest subtraces when limits reached
 
 ```yaml
 processors:
-  subtrace:
+  subtraceaggregator:
     timeout: 30s
     max_spans_per_subtrace: 1000
-    max_subtraces: 10000
-    eviction_policy: lru
 ```
 
 ## Span Ordering Considerations
 
-Spans may arrive out of order. The processor handles this by:
-
-1. Buffering all spans until root span ends
-2. Using span timestamps for ordering when needed
-3. Applying aggregations based on logical order (parent before child)
+Spans may arrive out of order. The `any` aggregation uses **arrival order** (not chronological). This is appropriate when:
+- All values are expected to be the same
+- Only one span will have the attribute
 
 ## Error Handling
 
 | Scenario | Behavior |
 |----------|----------|
-| Root span never arrives | Flush on timeout, skip root-only aggregations |
-| Duplicate subtrace ID | Merge spans (unlikely with proper hashing) |
-| Invalid aggregation config | Log warning, skip aggregation |
-| Memory pressure | Evict oldest subtraces, emit warning metric |
+| Root span never arrives | Flush on timeout, spans pass through unchanged |
+| No matching spans | Target attribute not set on root span |
+| Type mismatch | Span skipped for that aggregation |
+| Invalid condition | Log warning, skip aggregation |
 
 ## Metrics Emitted by Processor
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `subtrace_processor_active_subtraces` | Gauge | Current subtraces in memory |
-| `subtrace_processor_spans_buffered` | Gauge | Total spans buffered |
-| `subtrace_processor_subtraces_completed` | Counter | Subtraces successfully processed |
-| `subtrace_processor_subtraces_timeout` | Counter | Subtraces flushed due to timeout |
-| `subtrace_processor_subtraces_evicted` | Counter | Subtraces evicted due to memory |
+| `subtraceaggregator_active_subtraces` | Gauge | Current subtraces in memory |
+| `subtraceaggregator_buffered_spans` | Gauge | Total spans buffered |
+| `subtraceaggregator_completed_total` | Counter | Subtraces completed |
+| `subtraceaggregator_no_root_span_total` | Counter | Subtraces without root span |
+| `subtraceaggregator_aggregation_errors_total` | Counter | Aggregation failures |
 
-## Next Steps
+## Related Documents
 
-1. **Implement SubtraceIdProcessor** in Python for application services
-2. **Expand demo services** with the three use cases
-3. **Implement collector processor** (Go) or use transform processor as approximation
-4. **Test end-to-end** with the demo application
+- [Subtrace Aggregator Processor Spec](./SUBTRACEAGGREGATOR_PROCESSOR_SPEC.md) — Complete configuration reference
+- [SubtraceIdProcessor (Python)](../subtrace_processor.py) — Application-side processor

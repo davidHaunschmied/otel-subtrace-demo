@@ -81,28 +81,34 @@ from subtrace_processor import SubtraceIdProcessor
 trace_provider.add_span_processor(SubtraceIdProcessor())
 ```
 
-### 2. Collector Aggregation (Future)
+### 2. Subtrace Aggregator (Collector-Side)
 
-A stateful collector processor can aggregate child span data onto the root span:
+The `subtraceaggregator` processor buffers spans by `subtrace.id` and aggregates child span data onto the root span:
 
 ```yaml
 processors:
-  subtrace:
-    aggregations:
+  subtraceaggregator:
+    timeout: 30s
+    max_spans_per_subtrace: 1000
+    error_mode: ignore
+    
+    attribute_aggregations:
       # Count database calls (N+1 detection)
-      - source_attribute: "db.system"
-        target_attribute: "subtrace.db_call_count"
-        aggregation: count
+      - aggregation: count
+        condition: 'attributes["db.system"] != nil'
+        target: subtrace.db_call_count
       
-      # Propagate exceptions to root span
-      - source_event: "exception"
-        target_event: "exception"
-        aggregation: copy_event
-      
-      # Capture customer tier
-      - source_attribute: "customer.loyalty_status"
-        target_attribute: "subtrace.customer.loyalty_status"
-        aggregation: first
+      # Capture customer tier (first encountered value)
+      - aggregation: any
+        source: attributes["customer.loyalty_status"]
+        target: subtrace.customer.loyalty_status
+    
+    event_aggregations:
+      # Propagate payment exceptions to root span
+      - aggregation: copy_event
+        source: exception
+        condition: 'attributes["exception.type"] == "PaymentFailedException"'
+        max_events: 5
 ```
 
 ## Quick Start
@@ -214,14 +220,15 @@ python test_services.py
 
 ## Documentation
 
-- **[Architecture Deep Dive](docs/ARCHITECTURE_STATEFUL_SUBTRACE_PROCESSOR.md)** — Detailed design of the subtrace processor
-- **[Collector Configuration](docs/COLLECTOR_SUBTRACE_PROCESSOR_CONFIG.md)** — Future stateful processor config schema
+- **[Subtrace Aggregator Spec](docs/SUBTRACEAGGREGATOR_PROCESSOR_SPEC.md)** — Complete processor specification with OTTL syntax
+- **[Architecture Deep Dive](docs/ARCHITECTURE_STATEFUL_SUBTRACE_PROCESSOR.md)** — System design and data flow
 
 ## Roadmap
 
 - [x] SubtraceIdProcessor (Python SDK)
 - [x] Demo services with subtrace support
-- [ ] Stateful Collector Processor (Go)
+- [x] Subtrace Aggregator Processor Spec
+- [ ] Subtrace Aggregator Processor (Go implementation)
 - [ ] Dynatrace dashboard templates
 - [ ] N+1 query alerting rules
 
