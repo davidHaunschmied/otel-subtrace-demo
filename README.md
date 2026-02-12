@@ -228,9 +228,25 @@ python test_services.py
 - [x] SubtraceIdProcessor (Python SDK)
 - [x] Demo services with subtrace support
 - [x] Subtrace Aggregator Processor Spec
-- [ ] Subtrace Aggregator Processor (Go implementation)
+- [x] Subtrace Aggregator Processor (Go implementation)
 - [ ] Dynatrace dashboard templates
 - [ ] N+1 query alerting rules
+
+## Building the Custom Collector
+
+The custom collector with `subtraceaggregator` is built automatically via docker-compose:
+
+```bash
+docker-compose build otel-collector
+```
+
+Or build manually:
+
+```bash
+docker build -f collector/Dockerfile -t otelcol-subtrace .
+```
+
+See `processor/subtraceaggregator/` for the implementation and `collector/builder-config.yaml` for the build configuration.
 
 ## Clean Up
 

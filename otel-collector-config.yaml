@@ -23,41 +23,44 @@ processors:
     limit_mib: 512
     spike_limit_mib: 128
 
-  # Resource detection processor
-  resourcedetection:
-    detectors: [env, system]
-
-  # Attributes processor - add custom attributes
-  attributes:
-    actions:
-      - key: environment
-        value: demo
-        action: upsert
-      - key: collector.version
-        value: "1.0.0"
-        action: upsert
-
-  # Resource processor to add service-specific attributes
-  resource:
-    attributes:
-      - key: telemetry.sdk.name
-        value: opentelemetry
-        action: upsert
-      - key: telemetry.sdk.language
-        value: python
-        action: upsert
+  # Subtrace Aggregator - aggregates child span data onto root spans
+  subtraceaggregator:
+    timeout: 30s
+    max_spans_per_subtrace: 500
+    error_mode: ignore
+    
+    attribute_aggregations:
+      # Count database calls (N+1 detection)
+      - aggregation: count
+        condition: 'attributes["db.system"] != nil'
+        target: subtrace.db_call_count
+      
+      # Capture customer tier (first encountered)
+      - aggregation: any
+        source: attributes["customer.loyalty_status"]
+        target: subtrace.customer.loyalty_status
+      
+      # Collect unique tables accessed
+      - aggregation: all_distinct
+        source: attributes["db.sql.table"]
+        target: subtrace.tables_accessed
+        max_values: 20
+    
+    event_aggregations:
+      # Propagate exceptions to root span
+      - aggregation: copy_event
+        source: exception
+        max_events: 5
+      
+      # Count all exceptions
+      - aggregation: count
+        source: exception
+        target: subtrace.exception_count
 
 exporters:
   # Debug exporter - print to console for development
   debug:
     verbosity: detailed
-
-  # Prometheus exporter for metrics
-  prometheus:
-    endpoint: "0.0.0.0:8889"
-    namespace: "otel_demo"
-    const_labels:
-      environment: "demo"
 
   # OTLP exporter to Jaeger (local visualization)
   otlp/jaeger:
@@ -75,13 +78,8 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch, attributes, resource]
+      processors: [memory_limiter, subtraceaggregator, batch]
       exporters: [debug, otlp/jaeger, otlphttp/dynatrace]
-
-    metrics:
-      receivers: [otlp]
-      processors: [memory_limiter, batch, attributes, resource]
-      exporters: [debug, prometheus, otlphttp/dynatrace]
 
   # Telemetry configuration for the collector itself
   telemetry:

@@ -9,8 +9,8 @@ import requests
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-BASE_URL_A = "http://localhost:8001"
-BASE_URL_B = "http://localhost:8002"
+BASE_URL_A = "http://localhost:18001"
+BASE_URL_B = "http://localhost:18002"
 
 def test_health():
     """Test health endpoints"""
@@ -37,7 +37,12 @@ def test_service_communication():
     for data_id in test_ids:
         try:
             response = requests.get(f"{BASE_URL_A}/api/process/{data_id}")
-            print(f"✓ Processed {data_id}: {response.json()['processing_time_a']:.3f}s")
+            data = response.json()
+            processing_time = data.get('processing_time_a_ms', 0) / 1000
+            result = data.get('result', {})
+            payment_result = result.get('payment_result') if result else None
+            payment_status = payment_result.get('status', 'N/A') if payment_result else 'no_payment'
+            print(f"✓ Processed {data_id}: {processing_time:.3f}s (payment: {payment_status})")
         except Exception as e:
             print(f"✗ Failed to process {data_id}: {e}")
 
@@ -45,41 +50,40 @@ def test_error_scenarios():
     """Test error scenarios"""
     print("\nTesting error scenarios...")
     
-    # Test non-existent data
+    # Test invalid customer ID format
     try:
-        response = requests.get(f"{BASE_URL_A}/api/process/nonexistent")
-        print(f"✗ Should have failed: {response.status_code}")
-    except requests.exceptions.HTTPError as e:
-        print(f"✓ Correctly handled non-existent data: {e}")
+        response = requests.get(f"{BASE_URL_A}/api/process/invalid_id")
+        if response.status_code == 400:
+            print(f"✓ Correctly rejected invalid ID format (400)")
+        else:
+            print(f"? Unexpected status: {response.status_code}")
     except Exception as e:
-        print(f"✓ Non-existent data test: {e}")
+        print(f"✓ Invalid ID test: {e}")
     
-    # Test invalid data creation
+    # Test non-existent customer
     try:
-        response = requests.post(f"{BASE_URL_B}/api/data/user123", json={})
-        print(f"✗ Should have failed: {response.status_code}")
-    except requests.exceptions.HTTPError as e:
-        print(f"✓ Correctly handled duplicate data: {e}")
+        response = requests.get(f"{BASE_URL_B}/api/data/user999")
+        if response.status_code == 404:
+            print(f"✓ Correctly returned 404 for non-existent customer")
+        else:
+            print(f"? Unexpected status: {response.status_code}")
     except Exception as e:
-        print(f"✓ Duplicate data test: {e}")
+        print(f"✓ Non-existent customer test: {e}")
 
-def create_test_data():
-    """Create some test data"""
-    print("\nCreating test data...")
+def test_direct_service_b():
+    """Test Service B directly"""
+    print("\nTesting Service B directly...")
     
-    test_data = [
-        {"name": "Alice Wilson", "email": "alice@example.com", "age": 28},
-        {"name": "Bob Brown", "email": "bob@example.com", "age": 35},
-        {"name": "Charlie Davis", "email": "charlie@example.com", "age": 42},
-    ]
+    test_ids = ["user123", "user456", "user789"]
     
-    for i, data in enumerate(test_data):
-        data_id = f"testuser{i+1}"
+    for data_id in test_ids:
         try:
-            response = requests.post(f"{BASE_URL_B}/api/data/{data_id}", json=data)
-            print(f"✓ Created {data_id}")
+            response = requests.get(f"{BASE_URL_B}/api/data/{data_id}")
+            data = response.json()
+            loyalty = data.get('customer', {}).get('loyalty_status', 'N/A')
+            print(f"✓ Got {data_id}: loyalty={loyalty}")
         except Exception as e:
-            print(f"✗ Failed to create {data_id}: {e}")
+            print(f"✗ Failed to get {data_id}: {e}")
 
 def generate_load(duration_seconds=60, concurrent_requests=5):
     """Generate load for testing"""
@@ -111,18 +115,19 @@ def generate_load(duration_seconds=60, concurrent_requests=5):
     
     print(f"Load generation complete: {request_count} requests, {error_count} errors")
 
-def list_data():
-    """List all data in Service B"""
-    print("\nListing data in Service B...")
+def test_loyalty_endpoint():
+    """Test loyalty status endpoint"""
+    print("\nTesting loyalty endpoint...")
     
-    try:
-        response = requests.get(f"{BASE_URL_B}/api/data")
-        data = response.json()
-        print(f"Found {data['data_count']} data entries:")
-        for data_id in data['data_ids']:
-            print(f"  - {data_id}")
-    except Exception as e:
-        print(f"Failed to list data: {e}")
+    test_ids = ["user123", "user456", "user789"]
+    
+    for data_id in test_ids:
+        try:
+            response = requests.get(f"{BASE_URL_B}/api/customer/{data_id}/loyalty")
+            data = response.json()
+            print(f"✓ {data_id}: {data.get('loyalty_status', 'N/A')} (discount: {data.get('benefits', {}).get('discount', 0)}%)")
+        except Exception as e:
+            print(f"✗ Failed to get loyalty for {data_id}: {e}")
 
 def main():
     """Main test function"""
@@ -135,8 +140,8 @@ def main():
     
     # Run tests
     test_health()
-    create_test_data()
-    list_data()
+    test_direct_service_b()
+    test_loyalty_endpoint()
     test_service_communication()
     test_error_scenarios()
     
@@ -153,9 +158,8 @@ def main():
     
     print("\n✅ Test completed!")
     print("\n📊 View telemetry data:")
-    print("  Jaeger: http://localhost:16686")
-    print("  Zipkin: http://localhost:9411")
-    print("  Prometheus: http://localhost:9090")
+    print("  Jaeger: http://localhost:26686")
+    print("  Prometheus: http://localhost:19090")
 
 if __name__ == "__main__":
     main()
