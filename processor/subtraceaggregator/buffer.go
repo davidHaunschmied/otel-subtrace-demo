@@ -140,26 +140,6 @@ func (b *Buffer) GetExpiredSubtraces(timeout time.Duration) []struct {
 	return expired
 }
 
-// Size returns the number of buffered traces.
-func (b *Buffer) Size() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return len(b.traces)
-}
-
-// TotalSpans returns the total number of buffered spans across all subtraces.
-func (b *Buffer) TotalSpans() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	total := 0
-	for _, traceState := range b.traces {
-		for _, subtraceState := range traceState.Subtraces {
-			total += len(subtraceState.Spans)
-		}
-	}
-	return total
-}
-
 // GetAllSubtraces returns all subtrace states in the buffer.
 func (b *Buffer) GetAllSubtraces() []*SubtraceState {
 	b.mu.RLock()

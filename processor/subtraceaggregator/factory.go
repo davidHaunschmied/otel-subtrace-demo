@@ -27,7 +27,6 @@ func createDefaultConfig() component.Config {
 	return &Config{
 		Timeout:             30 * time.Second,
 		MaxSpansPerSubtrace: 1000,
-		ErrorMode:           "ignore",
 	}
 }
 

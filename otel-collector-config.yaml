@@ -1,8 +1,4 @@
-# OpenTelemetry Collector Configuration
-# This configuration is set up for testing processors and showcasing OTel capabilities
-
 receivers:
-  # OTLP receiver for traces and metrics
   otlp:
     protocols:
       grpc:
@@ -11,64 +7,37 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  # Batch processor for better performance
   batch:
     timeout: 1s
-    send_batch_size: 1024
-    send_batch_max_size: 2048
 
-  # Memory limiter to prevent OOM
-  memory_limiter:
-    check_interval: 1s
-    limit_mib: 512
-    spike_limit_mib: 128
-
-  # Subtrace Aggregator - aggregates child span data onto root spans
   subtraceaggregator:
     timeout: 30s
     max_spans_per_subtrace: 500
-    error_mode: ignore
     
     attribute_aggregations:
-      # Count database calls (N+1 detection)
       - aggregation: count
         condition: 'attributes["db.system"] != nil'
         target: subtrace.db_call_count
       
-      # Capture customer tier (first encountered)
       - aggregation: any
         source: attributes["customer.loyalty_status"]
         target: subtrace.customer.loyalty_status
       
-      # Collect unique tables accessed
       - aggregation: all_distinct
         source: attributes["db.sql.table"]
         target: subtrace.tables_accessed
-        max_values: 20
     
     event_aggregations:
-      # Propagate exceptions to root span
       - aggregation: copy_event
         source: exception
         max_events: 5
-      
-      # Count all exceptions
-      - aggregation: count
-        source: exception
-        target: subtrace.exception_count
 
 exporters:
-  # Debug exporter - print to console for development
-  debug:
-    verbosity: detailed
-
-  # OTLP exporter to Jaeger (local visualization)
   otlp/jaeger:
     endpoint: jaeger:4317
     tls:
       insecure: true
 
-  # OTLP exporter to Dynatrace
   otlphttp/dynatrace:
     endpoint: ${env:DT_ENDPOINT}
     headers:
@@ -78,12 +47,5 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, subtraceaggregator, batch]
-      exporters: [debug, otlp/jaeger, otlphttp/dynatrace]
-
-  # Telemetry configuration for the collector itself
-  telemetry:
-    logs:
-      level: "info"
-    metrics:
-      level: "detailed"
+      processors: [subtraceaggregator, batch]
+      exporters: [otlp/jaeger, otlphttp/dynatrace]
