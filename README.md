@@ -44,35 +44,35 @@ Subtraces answer: *"What happened inside each service?"*
 ┌─────────────┐     HTTP     ┌─────────────┐
 │  Service A  │ ──────────► │  Service B  │
 │  (API)      │             │  (Data)     │
-└─────────────┘             └─────────────┘
+└──────┬──────┘             └──────┬──────┘
        │                           │
-       │      Standard OTel        │
-       │      (no code changes)    │
-       │                           │
-       └─────────── OTLP ───────────┘
-                    │
-              ┌─────────────┐
-              │  Collector  │
-              │  subtraceaggregator:
-              │  - groups by trace+resource
-              │  - calculates subtrace.id
-              │  - detects root span
-              │  - aggregates attributes
-              └─────────────┘
-                    │
-        ┌───────────┴───────────┐
-        │                       │
-   ┌─────────┐            ┌──────────┐
-   │ Jaeger  │            │Dynatrace │
-   │  (dev)  │            │ (prod)   │
-   └─────────┘            └──────────┘
+       │           OTLP            │
+       └─────────────┬─────────────┘
+                     │
+                     ▼
+       ┌─────────────────────────────┐
+       │         Collector           │
+       │    subtraceaggregator:      │
+       │    - groups by trace+resource
+       │    - calculates subtrace.id │
+       │    - detects root span      │
+       │    - aggregates attributes  │
+       └─────────────┬───────────────┘
+                     │
+           ┌─────────┴─────────┐
+           │                   │
+           ▼                   ▼
+     ┌──────────┐        ┌──────────┐
+     │  Jaeger  │        │Dynatrace │
+     │  (dev)   │        │  (prod)  │
+     └──────────┘        └──────────┘
 ```
 
 ## How It Works
 
-### Collector-Only Solution (No Code Changes Required)
+### Subtrace Aggregator Processor
 
-The `subtraceaggregator` processor runs entirely in the OpenTelemetry Collector. It:
+The `subtraceaggregator` processor runs in the OpenTelemetry Collector. It:
 
 1. **Buffers spans by trace ID** — Groups all spans from the same trace
 2. **Groups by resource attributes** — Spans with the same resource attributes (same service) form a subtrace
@@ -221,10 +221,9 @@ python test_services.py
 
 ## Roadmap
 
-- [x] ~~SubtraceIdProcessor (Python SDK)~~ — Replaced by collector-only solution
 - [x] Demo services with subtrace support
 - [x] Subtrace Aggregator Processor Spec
-- [x] Subtrace Aggregator Processor (Go implementation) — **Now handles all subtrace logic**
+- [x] Subtrace Aggregator Processor (Go implementation)
 - [ ] Dynatrace dashboard templates
 - [ ] N+1 query alerting rules
 
