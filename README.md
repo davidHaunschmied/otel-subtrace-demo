@@ -4,7 +4,7 @@ Demonstrate powerful **service-level real-time analytics** using the **Subtrace 
 
 ## What is a Subtrace?
 
-A **subtrace** is a logical grouping of all spans created within a single service during the processing of one request. While a distributed trace spans multiple services, a subtrace focuses on what happens *inside* one service.
+A **subtrace** is a logical grouping of all spans created within a single service during the processing of one trace. While a distributed trace spans multiple services, a subtrace focuses on what happens *inside* one service.
 
 ```
 Distributed Trace (spans across services):
@@ -25,7 +25,7 @@ Each subtrace has:
 
 ## Why Subtraces?
 
-Traditional tracing answers: *"What services did this request touch?"*
+Traditional tracing answers: *"What services did this trace touch?"*
 
 Subtraces answer: *"What happened inside each service?"*
 
