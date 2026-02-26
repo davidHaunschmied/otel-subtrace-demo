@@ -25,7 +25,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, SERVICE_INSTANCE_ID
 
-from subtrace_processor import SubtraceIdProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +87,7 @@ mock_order_database: Dict[str, Dict[str, Any]] = {
 
 
 def setup_opentelemetry():
-    """Configure OpenTelemetry tracing and metrics with SubtraceIdProcessor"""
+    """Configure OpenTelemetry tracing and metrics"""
     global tracer, meter, data_processing_counter, db_call_counter
 
     resource = Resource(attributes={
@@ -97,11 +96,10 @@ def setup_opentelemetry():
         SERVICE_INSTANCE_ID: "service-b-1"
     })
 
-    # Configure tracing with SubtraceIdProcessor
+    # Configure tracing
     trace_provider = TracerProvider(resource=resource)
-    trace_provider.add_span_processor(SubtraceIdProcessor())
     
-    # Then add the exporter processor
+    # Add the exporter processor
     otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     otlp_exporter = OTLPSpanExporter(endpoint=otel_endpoint, insecure=True)
     trace_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
@@ -128,7 +126,7 @@ def setup_opentelemetry():
         description="Total number of database calls"
     )
 
-    logger.info("OpenTelemetry initialized for Service B with SubtraceIdProcessor")
+    logger.info("OpenTelemetry initialized for Service B")
     return trace_provider
 
 

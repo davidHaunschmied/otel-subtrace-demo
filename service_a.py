@@ -2,7 +2,7 @@
 Service A - API Gateway with Subtrace Support
 
 Receives HTTP requests and calls Service B for data processing.
-Uses SubtraceIdProcessor to assign subtrace IDs to all spans.
+Subtrace IDs are assigned by the collector's subtraceaggregator processor.
 """
 
 import logging
@@ -22,7 +22,6 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, SERVICE_INSTANCE_ID
 
-from subtrace_processor import SubtraceIdProcessor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
 
 import requests
@@ -39,7 +38,7 @@ processing_time_histogram = None
 
 
 def setup_opentelemetry():
-    """Configure OpenTelemetry tracing and metrics with SubtraceIdProcessor"""
+    """Configure OpenTelemetry tracing and metrics"""
     global tracer, meter, request_counter, processing_time_histogram
 
     resource = Resource(attributes={
@@ -48,11 +47,10 @@ def setup_opentelemetry():
         SERVICE_INSTANCE_ID: "service-a-1"
     })
 
-    # Configure tracing with SubtraceIdProcessor
+    # Configure tracing
     trace_provider = TracerProvider(resource=resource)
-    trace_provider.add_span_processor(SubtraceIdProcessor())
     
-    # Then add the exporter processor
+    # Add the exporter processor
     otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     otlp_exporter = OTLPSpanExporter(endpoint=otel_endpoint, insecure=True)
     trace_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
@@ -79,7 +77,7 @@ def setup_opentelemetry():
         description="Time spent processing requests in Service A"
     )
 
-    logger.info("OpenTelemetry initialized for Service A with SubtraceIdProcessor")
+    logger.info("OpenTelemetry initialized for Service A")
     return trace_provider
 
 

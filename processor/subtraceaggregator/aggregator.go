@@ -39,11 +39,17 @@ func (a *Aggregator) Apply(state *SubtraceState) {
 	}
 }
 
+// getRootSpan returns the actual ptrace.Span from the RootSpan entry
+func getRootSpan(state *SubtraceState) ptrace.Span {
+	return state.RootSpan.Span
+}
+
 func (a *Aggregator) applyAttributeAggregation(state *SubtraceState, agg AttributeAggregation) {
 	var values []pcommon.Value
 	var count int
 
-	for _, span := range state.Spans {
+	for _, entry := range state.Spans {
+		span := entry.Span
 		// Skip root span for aggregation (we aggregate from children)
 		if isRoot, ok := span.Attributes().Get("subtrace.is_root_span"); ok && isRoot.Bool() {
 			continue
@@ -73,9 +79,10 @@ func (a *Aggregator) applyAttributeAggregation(state *SubtraceState, agg Attribu
 	}
 
 	// Apply aggregation and set on root span
+	rootSpan := getRootSpan(state)
 	result := computeAggregation(agg.Aggregation, values, count, agg.MaxValues)
 	if result.Type() != pcommon.ValueTypeEmpty {
-		result.CopyTo(state.RootSpan.Attributes().PutEmpty(agg.Target))
+		result.CopyTo(rootSpan.Attributes().PutEmpty(agg.Target))
 	}
 }
 
@@ -85,7 +92,8 @@ func (a *Aggregator) applyEventAggregation(state *SubtraceState, agg EventAggreg
 		sourceSpan ptrace.Span
 	}
 
-	for _, span := range state.Spans {
+	for _, entry := range state.Spans {
+		span := entry.Span
 		events := span.Events()
 		for i := 0; i < events.Len(); i++ {
 			event := events.At(i)
@@ -109,6 +117,7 @@ func (a *Aggregator) applyEventAggregation(state *SubtraceState, agg EventAggreg
 		return
 	}
 
+	rootSpan := getRootSpan(state)
 	switch agg.Aggregation {
 	case "copy_event":
 		maxEvents := agg.MaxEvents
@@ -120,14 +129,14 @@ func (a *Aggregator) applyEventAggregation(state *SubtraceState, agg EventAggreg
 				break
 			}
 			// Copy event to root span
-			newEvent := state.RootSpan.Events().AppendEmpty()
+			newEvent := rootSpan.Events().AppendEmpty()
 			me.event.CopyTo(newEvent)
 			// Add source_span_id
 			newEvent.Attributes().PutStr("source_span_id", me.sourceSpan.SpanID().String())
 		}
 
 	case "count":
-		state.RootSpan.Attributes().PutInt(agg.Target, int64(len(matchingEvents)))
+		rootSpan.Attributes().PutInt(agg.Target, int64(len(matchingEvents)))
 	}
 }
 

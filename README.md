@@ -20,8 +20,8 @@ Distributed Trace (spans across services):
 ```
 
 Each subtrace has:
-- **`subtrace.id`**: Unique identifier (hash of trace_id + first span_id in service)
-- **`subtrace.is_root_span`**: Marks the service entry point span
+- **`subtrace.id`**: Unique identifier (hash of trace_id + resource attributes)
+- **`subtrace.is_root_span`**: Marks the topmost span in the subtrace
 
 ## Why Subtraces?
 
@@ -46,15 +46,18 @@ Subtraces answer: *"What happened inside each service?"*
 │  (API)      │             │  (Data)     │
 └─────────────┘             └─────────────┘
        │                           │
-       │    SubtraceIdProcessor    │
-       │    assigns subtrace.id    │
+       │      Standard OTel        │
+       │      (no code changes)    │
        │                           │
        └─────────── OTLP ───────────┘
                     │
               ┌─────────────┐
               │  Collector  │
-              │  (enriches  │
-              │  root spans)│
+              │  subtraceaggregator:
+              │  - groups by trace+resource
+              │  - calculates subtrace.id
+              │  - detects root span
+              │  - aggregates attributes
               └─────────────┘
                     │
         ┌───────────┴───────────┐
@@ -67,23 +70,16 @@ Subtraces answer: *"What happened inside each service?"*
 
 ## How It Works
 
-### 1. SubtraceIdProcessor (Application-Side)
+### Collector-Only Solution (No Code Changes Required)
 
-Each service runs a `SubtraceIdProcessor` that:
-- Generates a unique `subtrace.id` for the first span in the service
-- Marks that span as `subtrace.is_root_span = true`
-- Propagates `subtrace.id` to all child spans
+The `subtraceaggregator` processor runs entirely in the OpenTelemetry Collector. It:
 
-```python
-from subtrace_processor import SubtraceIdProcessor
-
-# Add to your TracerProvider
-trace_provider.add_span_processor(SubtraceIdProcessor())
-```
-
-### 2. Subtrace Aggregator (Collector-Side)
-
-The `subtraceaggregator` processor buffers spans by `subtrace.id` and aggregates child span data onto the root span:
+1. **Buffers spans by trace ID** — Groups all spans from the same trace
+2. **Groups by resource attributes** — Spans with the same resource attributes (same service) form a subtrace
+3. **Calculates `subtrace.id`** — Hash of (trace_id + resource_attributes) ensures deterministic IDs
+4. **Detects root span** — Finds the topmost span in each subtrace (no parent in the subtrace)
+5. **Aggregates attributes** — Copies/aggregates data from child spans to the root span
+6. **Sets attributes** — Adds `subtrace.id` and `subtrace.is_root_span` to all spans
 
 ```yaml
 processors:
@@ -225,10 +221,10 @@ python test_services.py
 
 ## Roadmap
 
-- [x] SubtraceIdProcessor (Python SDK)
+- [x] ~~SubtraceIdProcessor (Python SDK)~~ — Replaced by collector-only solution
 - [x] Demo services with subtrace support
 - [x] Subtrace Aggregator Processor Spec
-- [x] Subtrace Aggregator Processor (Go implementation)
+- [x] Subtrace Aggregator Processor (Go implementation) — **Now handles all subtrace logic**
 - [ ] Dynatrace dashboard templates
 - [ ] N+1 query alerting rules
 
