@@ -185,40 +185,48 @@ func (p *subtraceProcessor) assignSubtraces(traceState *TraceState, traceID pcom
 		spanByID[spans[i].Span.SpanID().String()] = &spans[i]
 	}
 
-	// Assign subtrace ID to each span
 	subtraceAssignment := make(map[string]string) // spanID -> subtraceID
-	subtraceCounter := 0
+	subtraceCounter := &[]int{0}[0]
 
-	for i := range spans {
-		span := &spans[i]
+	// Recursive function to assign subtrace, resolving parents first
+	var assignSpan func(span *SpanEntry) string
+	assignSpan = func(span *SpanEntry) string {
 		spanID := span.Span.SpanID().String()
 
-		if _, assigned := subtraceAssignment[spanID]; assigned {
-			continue
+		if subtrace, assigned := subtraceAssignment[spanID]; assigned {
+			return subtrace
 		}
 
 		parentID := span.Span.ParentSpanID().String()
 		parent, hasParent := spanByID[parentID]
 
 		if !hasParent || span.Span.ParentSpanID().IsEmpty() {
-			// Orphan span - starts new subtrace
-			subtraceAssignment[spanID] = p.generateSubtraceID(traceID, subtraceCounter)
-			subtraceCounter++
-		} else if p.shouldStartNewSubtrace(parent, span) {
-			// Service boundary or resource change - new subtrace
-			subtraceAssignment[spanID] = p.generateSubtraceID(traceID, subtraceCounter)
-			subtraceCounter++
-		} else {
-			// Inherit parent's subtrace
-			parentSubtrace, parentAssigned := subtraceAssignment[parentID]
-			if !parentAssigned {
-				// Parent not yet assigned, assign it first (recursive case handled by iteration order)
-				parentSubtrace = p.generateSubtraceID(traceID, subtraceCounter)
-				subtraceAssignment[parentID] = parentSubtrace
-				subtraceCounter++
-			}
-			subtraceAssignment[spanID] = parentSubtrace
+			// Orphan/root span - starts new subtrace
+			subtrace := p.generateSubtraceID(traceID, *subtraceCounter)
+			*subtraceCounter++
+			subtraceAssignment[spanID] = subtrace
+			return subtrace
 		}
+
+		// Resolve parent's subtrace first
+		parentSubtrace := assignSpan(parent)
+
+		if p.shouldStartNewSubtrace(parent, span) {
+			// Service boundary - new subtrace
+			subtrace := p.generateSubtraceID(traceID, *subtraceCounter)
+			*subtraceCounter++
+			subtraceAssignment[spanID] = subtrace
+			return subtrace
+		}
+
+		// Inherit parent's subtrace
+		subtraceAssignment[spanID] = parentSubtrace
+		return parentSubtrace
+	}
+
+	// Assign all spans
+	for i := range spans {
+		assignSpan(&spans[i])
 	}
 
 	// Group spans by subtrace ID

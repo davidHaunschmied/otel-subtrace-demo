@@ -199,6 +199,29 @@ func TestAssignSubtraces_ProducerConsumer(t *testing.T) {
 	}
 }
 
+func TestAssignSubtraces_SameServiceChain(t *testing.T) {
+	p := &subtraceProcessor{}
+	traceID := pcommon.TraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+
+	// Reported bug: server -> internal -> client -> client should all be same subtrace
+	spans := []SpanEntry{
+		createSpanEntryWithIDs("server", "span1", "", ptrace.SpanKindServer, "resA"),
+		createSpanEntryWithIDs("internal", "span2", "span1", ptrace.SpanKindInternal, "resA"),
+		createSpanEntryWithIDs("client1", "span3", "span2", ptrace.SpanKindClient, "resA"),
+		createSpanEntryWithIDs("client2", "span4", "span3", ptrace.SpanKindClient, "resA"),
+	}
+
+	traceState := &TraceState{Spans: spans, FirstSeen: time.Now()}
+	subtraces := p.assignSubtraces(traceState, traceID)
+
+	if len(subtraces) != 1 {
+		t.Errorf("expected 1 subtrace for same-service chain, got %d", len(subtraces))
+	}
+	if len(subtraces[0].Spans) != 4 {
+		t.Errorf("expected all 4 spans in same subtrace, got %d", len(subtraces[0].Spans))
+	}
+}
+
 // Helper functions
 
 func createSpanEntry(kind ptrace.SpanKind, resourceHash string) *SpanEntry {
