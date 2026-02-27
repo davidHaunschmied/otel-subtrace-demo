@@ -10,24 +10,24 @@ import (
 
 // SpanEntry holds a span along with its resource and scope context.
 type SpanEntry struct {
-	Span     ptrace.Span
-	Resource ptrace.ResourceSpans
-	Scope    ptrace.ScopeSpans
-}
-
-// SubtraceState holds buffered spans for a single subtrace (same trace + resource attributes).
-type SubtraceState struct {
-	Spans        []SpanEntry
-	RootSpan     *SpanEntry // Will be determined when flushing (topmost span)
-	SubtraceID   string     // Calculated hash(traceID, resourceAttributes)
-	TraceID      pcommon.TraceID
+	Span         ptrace.Span
+	Resource     ptrace.ResourceSpans
+	Scope        ptrace.ScopeSpans
 	ResourceHash string
-	FirstSeen    time.Time
 }
 
-// TraceState holds all subtraces for a single trace, grouped by resource attributes.
+// SubtraceState holds buffered spans for a single subtrace.
+type SubtraceState struct {
+	Spans      []SpanEntry
+	RootSpan   *SpanEntry
+	SubtraceID string
+	TraceID    pcommon.TraceID
+	FirstSeen  time.Time
+}
+
+// TraceState holds all spans for a single trace before subtrace assignment.
 type TraceState struct {
-	Subtraces map[string]*SubtraceState // keyed by resource hash
+	Spans     []SpanEntry
 	FirstSeen time.Time
 }
 
@@ -46,8 +46,8 @@ func NewBuffer(maxSpansPerSubtrace int) *Buffer {
 	}
 }
 
-// Add adds a span to the buffer. Returns the subtrace ID if it should be flushed (max spans reached).
-func (b *Buffer) Add(traceID pcommon.TraceID, resourceHash string, subtraceID string, span ptrace.Span, resource ptrace.ResourceSpans, scope ptrace.ScopeSpans) (flushSubtraceID string, shouldFlush bool) {
+// Add adds a span to the buffer. Returns true if trace should be flushed (max spans reached).
+func (b *Buffer) Add(traceID pcommon.TraceID, resourceHash string, span ptrace.Span, resource ptrace.ResourceSpans, scope ptrace.ScopeSpans) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -56,99 +56,68 @@ func (b *Buffer) Add(traceID pcommon.TraceID, resourceHash string, subtraceID st
 	traceState, exists := b.traces[traceIDStr]
 	if !exists {
 		traceState = &TraceState{
-			Subtraces: make(map[string]*SubtraceState),
+			Spans:     make([]SpanEntry, 0),
 			FirstSeen: time.Now(),
 		}
 		b.traces[traceIDStr] = traceState
 	}
 
-	subtraceState, exists := traceState.Subtraces[resourceHash]
-	if !exists {
-		subtraceState = &SubtraceState{
-			Spans:        make([]SpanEntry, 0),
-			SubtraceID:   subtraceID,
-			TraceID:      traceID,
-			ResourceHash: resourceHash,
-			FirstSeen:    time.Now(),
-		}
-		traceState.Subtraces[resourceHash] = subtraceState
-	}
+	// Deep-copy span data to avoid referencing recycled memory
+	newSpan := ptrace.NewSpan()
+	span.CopyTo(newSpan)
 
-	// Add span entry
-	subtraceState.Spans = append(subtraceState.Spans, SpanEntry{
-		Span:     span,
-		Resource: resource,
-		Scope:    scope,
+	newResource := ptrace.NewResourceSpans()
+	resource.Resource().CopyTo(newResource.Resource())
+
+	newScope := ptrace.NewScopeSpans()
+	scope.Scope().CopyTo(newScope.Scope())
+
+	traceState.Spans = append(traceState.Spans, SpanEntry{
+		Span:         newSpan,
+		Resource:     newResource,
+		Scope:        newScope,
+		ResourceHash: resourceHash,
 	})
 
-	if len(subtraceState.Spans) >= b.maxSpans {
-		return subtraceID, true
-	}
-	return "", false
+	return len(traceState.Spans) >= b.maxSpans
 }
 
-// RemoveSubtrace removes and returns a specific subtrace from the buffer.
-func (b *Buffer) RemoveSubtrace(traceID pcommon.TraceID, resourceHash string) *SubtraceState {
+// RemoveTrace removes and returns all spans for a trace.
+func (b *Buffer) RemoveTrace(traceID pcommon.TraceID) *TraceState {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	traceIDStr := traceID.String()
-	traceState, exists := b.traces[traceIDStr]
-	if !exists {
-		return nil
-	}
-
-	subtraceState := traceState.Subtraces[resourceHash]
-	delete(traceState.Subtraces, resourceHash)
-
-	// Clean up trace if no more subtraces
-	if len(traceState.Subtraces) == 0 {
-		delete(b.traces, traceIDStr)
-	}
-
-	return subtraceState
+	traceState := b.traces[traceIDStr]
+	delete(b.traces, traceIDStr)
+	return traceState
 }
 
-// GetExpiredTraces returns trace IDs that have exceeded the timeout.
-// Returns a list of (traceID, resourceHash) pairs for all expired subtraces.
-func (b *Buffer) GetExpiredSubtraces(timeout time.Duration) []struct {
-	TraceID      pcommon.TraceID
-	ResourceHash string
-} {
+// GetExpiredTraceIDs returns trace IDs that have exceeded the timeout.
+func (b *Buffer) GetExpiredTraceIDs(timeout time.Duration) []pcommon.TraceID {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	var expired []struct {
-		TraceID      pcommon.TraceID
-		ResourceHash string
-	}
+	var expired []pcommon.TraceID
 	cutoff := time.Now().Add(-timeout)
 
 	for _, traceState := range b.traces {
-		for resourceHash, subtraceState := range traceState.Subtraces {
-			if subtraceState.FirstSeen.Before(cutoff) {
-				expired = append(expired, struct {
-					TraceID      pcommon.TraceID
-					ResourceHash string
-				}{
-					TraceID:      subtraceState.TraceID,
-					ResourceHash: resourceHash,
-				})
-			}
+		if traceState.FirstSeen.Before(cutoff) && len(traceState.Spans) > 0 {
+			expired = append(expired, traceState.Spans[0].Span.TraceID())
 		}
 	}
 	return expired
 }
 
-// GetAllSubtraces returns all subtrace states in the buffer.
-func (b *Buffer) GetAllSubtraces() []*SubtraceState {
+// GetAllTraceIDs returns all trace IDs in the buffer.
+func (b *Buffer) GetAllTraceIDs() []pcommon.TraceID {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	var subtraces []*SubtraceState
+	var traceIDs []pcommon.TraceID
 	for _, traceState := range b.traces {
-		for _, subtraceState := range traceState.Subtraces {
-			subtraces = append(subtraces, subtraceState)
+		if len(traceState.Spans) > 0 {
+			traceIDs = append(traceIDs, traceState.Spans[0].Span.TraceID())
 		}
 	}
-	return subtraces
+	return traceIDs
 }

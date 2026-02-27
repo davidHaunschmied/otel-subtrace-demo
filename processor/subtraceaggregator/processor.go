@@ -52,11 +52,11 @@ func (p *subtraceProcessor) Shutdown(ctx context.Context) error {
 	close(p.shutdownCh)
 	p.wg.Wait()
 
-	// Flush all remaining subtraces
-	for _, state := range p.buffer.GetAllSubtraces() {
-		if err := p.flushSubtrace(ctx, state.TraceID, state.ResourceHash); err != nil {
-			p.logger.Error("failed to flush subtrace on shutdown",
-				zap.String("subtrace_id", state.SubtraceID),
+	// Flush all remaining traces
+	for _, traceID := range p.buffer.GetAllTraceIDs() {
+		if err := p.flushTrace(ctx, traceID); err != nil {
+			p.logger.Error("failed to flush trace on shutdown",
+				zap.String("trace_id", traceID.String()),
 				zap.Error(err))
 		}
 	}
@@ -70,17 +70,12 @@ func (p *subtraceProcessor) Capabilities() consumer.Capabilities {
 }
 
 func (p *subtraceProcessor) ConsumeTraces(ctx context.Context, td ptrace.Traces) error {
-	var toFlush []struct {
-		TraceID      pcommon.TraceID
-		ResourceHash string
-	}
+	var toFlush []pcommon.TraceID
 
 	resourceSpans := td.ResourceSpans()
 	for i := 0; i < resourceSpans.Len(); i++ {
 		rs := resourceSpans.At(i)
 		resource := rs.Resource()
-
-		// Calculate resource hash for subtrace grouping
 		resourceHash := p.hashResourceAttributes(resource.Attributes())
 
 		scopeSpans := rs.ScopeSpans()
@@ -91,27 +86,18 @@ func (p *subtraceProcessor) ConsumeTraces(ctx context.Context, td ptrace.Traces)
 				span := spans.At(k)
 				traceID := span.TraceID()
 
-				// Calculate subtrace ID as hash(traceID, resourceAttributes)
-				subtraceID := p.calculateSubtraceID(traceID, resourceHash)
-
-				// Add to buffer
-				_, shouldFlush := p.buffer.Add(traceID, resourceHash, subtraceID, span, rs, ss)
+				shouldFlush := p.buffer.Add(traceID, resourceHash, span, rs, ss)
 				if shouldFlush {
-					toFlush = append(toFlush, struct {
-						TraceID      pcommon.TraceID
-						ResourceHash string
-					}{TraceID: traceID, ResourceHash: resourceHash})
+					toFlush = append(toFlush, traceID)
 				}
 			}
 		}
 	}
 
-	// Flush subtraces that hit max spans
-	for _, item := range toFlush {
-		if err := p.flushSubtrace(ctx, item.TraceID, item.ResourceHash); err != nil {
-			p.logger.Error("failed to flush subtrace",
-				zap.String("trace_id", item.TraceID.String()),
-				zap.String("resource_hash", item.ResourceHash),
+	for _, traceID := range toFlush {
+		if err := p.flushTrace(ctx, traceID); err != nil {
+			p.logger.Error("failed to flush trace",
+				zap.String("trace_id", traceID.String()),
 				zap.Error(err))
 		}
 	}
@@ -130,12 +116,10 @@ func (p *subtraceProcessor) flushLoop() {
 		case <-p.shutdownCh:
 			return
 		case <-ticker.C:
-			expired := p.buffer.GetExpiredSubtraces(p.config.Timeout)
-			for _, item := range expired {
-				if err := p.flushSubtrace(context.Background(), item.TraceID, item.ResourceHash); err != nil {
-					p.logger.Error("failed to flush expired subtrace",
-						zap.String("trace_id", item.TraceID.String()),
-						zap.String("resource_hash", item.ResourceHash),
+			for _, traceID := range p.buffer.GetExpiredTraceIDs(p.config.Timeout) {
+				if err := p.flushTrace(context.Background(), traceID); err != nil {
+					p.logger.Error("failed to flush expired trace",
+						zap.String("trace_id", traceID.String()),
 						zap.Error(err))
 				}
 			}
@@ -143,83 +127,174 @@ func (p *subtraceProcessor) flushLoop() {
 	}
 }
 
-func (p *subtraceProcessor) flushSubtrace(ctx context.Context, traceID pcommon.TraceID, resourceHash string) error {
-	state := p.buffer.RemoveSubtrace(traceID, resourceHash)
-	if state == nil {
+func (p *subtraceProcessor) flushTrace(ctx context.Context, traceID pcommon.TraceID) error {
+	traceState := p.buffer.RemoveTrace(traceID)
+	if traceState == nil || len(traceState.Spans) == 0 {
 		return nil
 	}
 
-	// Find the topmost span (root of subtrace) - the one with no parent in this subtrace
-	// or the one whose parent is not in this subtrace
-	p.determineRootSpan(state)
+	// Assign spans to subtraces based on parent-child relationships and service boundaries
+	subtraces := p.assignSubtraces(traceState, traceID)
 
-	// Set subtrace.id and subtrace.is_root_span on all spans
-	for i := range state.Spans {
-		entry := &state.Spans[i]
-		entry.Span.Attributes().PutStr("subtrace.id", state.SubtraceID)
+	// Process each subtrace
+	for _, state := range subtraces {
+		p.determineRootSpan(state)
 
-		if state.RootSpan != nil && entry == state.RootSpan {
-			entry.Span.Attributes().PutBool("subtrace.is_root_span", true)
+		for i := range state.Spans {
+			entry := &state.Spans[i]
+			entry.Span.Attributes().PutStr("subtrace.id", state.SubtraceID)
+			if state.RootSpan != nil && entry == state.RootSpan {
+				entry.Span.Attributes().PutBool("subtrace.is_root_span", true)
+			}
+		}
+
+		if state.RootSpan != nil {
+			p.aggregator.Apply(state)
+		}
+
+		// Build and send output
+		td := ptrace.NewTraces()
+		if len(state.Spans) > 0 {
+			rs := td.ResourceSpans().AppendEmpty()
+			state.Spans[0].Resource.Resource().CopyTo(rs.Resource())
+			ss := rs.ScopeSpans().AppendEmpty()
+			state.Spans[0].Scope.Scope().CopyTo(ss.Scope())
+			for _, entry := range state.Spans {
+				entry.Span.CopyTo(ss.Spans().AppendEmpty())
+			}
+		}
+
+		if err := p.nextConsumer.ConsumeTraces(ctx, td); err != nil {
+			return err
 		}
 	}
 
-	// Apply aggregations
-	if state.RootSpan != nil {
-		p.aggregator.Apply(state)
-		p.logger.Debug("applied aggregations to subtrace",
-			zap.String("subtrace_id", state.SubtraceID),
-			zap.Int("span_count", len(state.Spans)))
-	} else {
-		p.logger.Warn("subtrace has no root span, passing through unchanged",
-			zap.String("subtrace_id", state.SubtraceID),
-			zap.Int("span_count", len(state.Spans)))
+	return nil
+}
+
+// assignSubtraces groups spans into subtraces based on parent-child relationships and service boundaries.
+func (p *subtraceProcessor) assignSubtraces(traceState *TraceState, traceID pcommon.TraceID) []*SubtraceState {
+	spans := traceState.Spans
+	if len(spans) == 0 {
+		return nil
 	}
 
-	// Build output traces - group by resource and scope
-	td := ptrace.NewTraces()
+	// Build span lookup by span ID
+	spanByID := make(map[string]*SpanEntry)
+	for i := range spans {
+		spanByID[spans[i].Span.SpanID().String()] = &spans[i]
+	}
 
-	// Use first span's resource/scope as template (all should be same resource)
-	if len(state.Spans) > 0 {
-		rs := td.ResourceSpans().AppendEmpty()
-		state.Spans[0].Resource.Resource().CopyTo(rs.Resource())
+	// Assign subtrace ID to each span
+	subtraceAssignment := make(map[string]string) // spanID -> subtraceID
+	subtraceCounter := 0
 
-		ss := rs.ScopeSpans().AppendEmpty()
-		state.Spans[0].Scope.Scope().CopyTo(ss.Scope())
+	for i := range spans {
+		span := &spans[i]
+		spanID := span.Span.SpanID().String()
 
-		for _, entry := range state.Spans {
-			entry.Span.CopyTo(ss.Spans().AppendEmpty())
+		if _, assigned := subtraceAssignment[spanID]; assigned {
+			continue
+		}
+
+		parentID := span.Span.ParentSpanID().String()
+		parent, hasParent := spanByID[parentID]
+
+		if !hasParent || span.Span.ParentSpanID().IsEmpty() {
+			// Orphan span - starts new subtrace
+			subtraceAssignment[spanID] = p.generateSubtraceID(traceID, subtraceCounter)
+			subtraceCounter++
+		} else if p.shouldStartNewSubtrace(parent, span) {
+			// Service boundary or resource change - new subtrace
+			subtraceAssignment[spanID] = p.generateSubtraceID(traceID, subtraceCounter)
+			subtraceCounter++
+		} else {
+			// Inherit parent's subtrace
+			parentSubtrace, parentAssigned := subtraceAssignment[parentID]
+			if !parentAssigned {
+				// Parent not yet assigned, assign it first (recursive case handled by iteration order)
+				parentSubtrace = p.generateSubtraceID(traceID, subtraceCounter)
+				subtraceAssignment[parentID] = parentSubtrace
+				subtraceCounter++
+			}
+			subtraceAssignment[spanID] = parentSubtrace
 		}
 	}
 
-	// Send to next consumer
-	return p.nextConsumer.ConsumeTraces(ctx, td)
+	// Group spans by subtrace ID
+	subtraceMap := make(map[string]*SubtraceState)
+	for i := range spans {
+		span := &spans[i]
+		spanID := span.Span.SpanID().String()
+		subtraceID := subtraceAssignment[spanID]
+
+		if _, exists := subtraceMap[subtraceID]; !exists {
+			subtraceMap[subtraceID] = &SubtraceState{
+				Spans:      make([]SpanEntry, 0),
+				SubtraceID: subtraceID,
+				TraceID:    traceID,
+				FirstSeen:  traceState.FirstSeen,
+			}
+		}
+		subtraceMap[subtraceID].Spans = append(subtraceMap[subtraceID].Spans, *span)
+	}
+
+	// Convert to slice
+	result := make([]*SubtraceState, 0, len(subtraceMap))
+	for _, state := range subtraceMap {
+		result = append(result, state)
+	}
+	return result
+}
+
+// shouldStartNewSubtrace determines if a child span should start a new subtrace.
+func (p *subtraceProcessor) shouldStartNewSubtrace(parent, child *SpanEntry) bool {
+	// Different resource → new subtrace
+	if parent.ResourceHash != child.ResourceHash {
+		return true
+	}
+	// Service boundary detection
+	childKind := child.Span.Kind()
+	parentKind := parent.Span.Kind()
+	// Treat UNSPECIFIED as INTERNAL
+	if childKind == ptrace.SpanKindUnspecified {
+		childKind = ptrace.SpanKindInternal
+	}
+	if parentKind == ptrace.SpanKindUnspecified {
+		parentKind = ptrace.SpanKindInternal
+	}
+	isChildEntryPoint := childKind == ptrace.SpanKindServer || childKind == ptrace.SpanKindConsumer
+	isParentEntryPoint := parentKind == ptrace.SpanKindServer || parentKind == ptrace.SpanKindConsumer
+	return isChildEntryPoint && !isParentEntryPoint
+}
+
+// generateSubtraceID creates a unique subtrace ID.
+func (p *subtraceProcessor) generateSubtraceID(traceID pcommon.TraceID, counter int) string {
+	combined := fmt.Sprintf("%s:%d", traceID.String(), counter)
+	hash := sha256.Sum256([]byte(combined))
+	return hex.EncodeToString(hash[:8])
 }
 
 // determineRootSpan finds the topmost span in the subtrace.
-// The root span is the one whose parent span ID is not present in this subtrace.
 func (p *subtraceProcessor) determineRootSpan(state *SubtraceState) {
 	if len(state.Spans) == 0 {
 		return
 	}
 
-	// Build a set of all span IDs in this subtrace
 	spanIDs := make(map[string]bool)
 	for _, entry := range state.Spans {
 		spanIDs[entry.Span.SpanID().String()] = true
 	}
 
-	// Find spans whose parent is not in this subtrace (candidate roots)
 	var candidates []int
 	for i, entry := range state.Spans {
 		parentID := entry.Span.ParentSpanID().String()
-		// Empty parent ID (all zeros) or parent not in this subtrace
 		if entry.Span.ParentSpanID().IsEmpty() || !spanIDs[parentID] {
 			candidates = append(candidates, i)
 		}
 	}
 
 	if len(candidates) == 0 {
-		// Fallback: use the span with earliest start time
 		earliest := 0
 		for i, entry := range state.Spans {
 			if entry.Span.StartTimestamp() < state.Spans[earliest].Span.StartTimestamp() {
@@ -235,7 +310,6 @@ func (p *subtraceProcessor) determineRootSpan(state *SubtraceState) {
 		return
 	}
 
-	// Multiple candidates: pick the one with earliest start time
 	earliest := candidates[0]
 	for _, idx := range candidates[1:] {
 		if state.Spans[idx].Span.StartTimestamp() < state.Spans[earliest].Span.StartTimestamp() {
@@ -267,9 +341,3 @@ func (p *subtraceProcessor) hashResourceAttributes(attrs pcommon.Map) string {
 	return hex.EncodeToString(hash[:8]) // Use first 8 bytes (64 bits)
 }
 
-// calculateSubtraceID generates a subtrace ID from trace ID and resource hash.
-func (p *subtraceProcessor) calculateSubtraceID(traceID pcommon.TraceID, resourceHash string) string {
-	combined := fmt.Sprintf("%s:%s", traceID.String(), resourceHash)
-	hash := sha256.Sum256([]byte(combined))
-	return hex.EncodeToString(hash[:8]) // 16-character hex string
-}

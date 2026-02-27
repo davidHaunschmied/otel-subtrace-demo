@@ -50,11 +50,19 @@ Open **Jaeger UI** at http://localhost:26686 and look for:
 
 **How the processor works:**
 1. Buffers incoming spans by trace ID
-2. Groups spans by resource attributes (same service = same subtrace)
-3. Assigns a unique `subtrace.id` to each group
-4. Identifies the root span of each subtrace
-5. Aggregates data from child spans onto the root span
-6. Flushes after timeout or max spans reached
+2. Assigns subtraces based on **parent-child relationships** and **service boundaries**
+3. Aggregates data from child spans onto the subtrace root span
+4. Flushes after timeout or max spans reached
+
+### Subtrace Boundary Detection
+
+A new subtrace starts when:
+- **Different resource** (different service)
+- **Service entry point**: `SERVER` or `CONSUMER` span with non-entry parent (`CLIENT`, `PRODUCER`, `INTERNAL`)
+
+Same subtrace continues for:
+- Internal routing (`SERVER` → `SERVER`)
+- Same-service spans (`INTERNAL` → `INTERNAL`)
 
 ## Processor Configuration
 
