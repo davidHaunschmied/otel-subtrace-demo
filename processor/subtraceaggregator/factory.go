@@ -26,7 +26,7 @@ func NewFactory() processor.Factory {
 func createDefaultConfig() component.Config {
 	return &Config{
 		Timeout:             30 * time.Second,
-		MaxSpansPerSubtrace: 1000,
+		MaxSpansPerTrace: 1000,
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 // Config defines the configuration for the subtraceaggregator processor.
 type Config struct {
 	Timeout               time.Duration          `mapstructure:"timeout"`
-	MaxSpansPerSubtrace   int                    `mapstructure:"max_spans_per_subtrace"`
+	MaxSpansPerTrace      int                    `mapstructure:"max_spans_per_trace"`
 	AttributeAggregations []AttributeAggregation `mapstructure:"attribute_aggregations"`
 	EventAggregations     []EventAggregation     `mapstructure:"event_aggregations"`
 }
@@ -37,8 +37,8 @@ func (cfg *Config) Validate() error {
 	if cfg.Timeout <= 0 {
 		return errors.New("timeout must be positive")
 	}
-	if cfg.MaxSpansPerSubtrace <= 0 {
-		return errors.New("max_spans_per_subtrace must be positive")
+	if cfg.MaxSpansPerTrace <= 0 {
+		return errors.New("max_spans_per_trace must be positive")
 	}
 	for _, agg := range cfg.AttributeAggregations {
 		if err := validateAttributeAggregation(agg); err != nil {

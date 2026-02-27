@@ -32,7 +32,7 @@ func newProcessor(logger *zap.Logger, cfg *Config, next consumer.Traces) (*subtr
 		logger:       logger,
 		config:       cfg,
 		nextConsumer: next,
-		buffer:       NewBuffer(cfg.MaxSpansPerSubtrace),
+		buffer:       NewBuffer(cfg.MaxSpansPerTrace),
 		aggregator:   NewAggregator(cfg.AttributeAggregations, cfg.EventAggregations),
 		shutdownCh:   make(chan struct{}),
 	}
@@ -44,7 +44,7 @@ func (p *subtraceProcessor) Start(ctx context.Context, host component.Host) erro
 	go p.flushLoop()
 	p.logger.Info("subtraceaggregator processor started",
 		zap.Duration("timeout", p.config.Timeout),
-		zap.Int("max_spans_per_subtrace", p.config.MaxSpansPerSubtrace))
+		zap.Int("max_spans_per_trace", p.config.MaxSpansPerTrace))
 	return nil
 }
 

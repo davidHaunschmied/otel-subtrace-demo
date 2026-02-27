@@ -70,7 +70,7 @@ Same subtrace continues for:
 processors:
   subtraceaggregator:
     timeout: 30s
-    max_spans_per_subtrace: 500
+    max_spans_per_trace: 500
     
     attribute_aggregations:
       - aggregation: count
