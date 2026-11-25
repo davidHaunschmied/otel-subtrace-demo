@@ -1,6 +1,6 @@
 # Dynatrace notebook for the astroshop subtrace showcase: a story in four chapters.
-#   create:  dtctl create notebook -f astroshop/dynatrace-notebook.yaml
-#   update:  dtctl apply -f astroshop/dynatrace-notebook.yaml --id <notebook-id>
+#   create:  dtctl create notebook -f dynatrace/notebook.yaml
+#   update:  dtctl apply -f dynatrace/notebook.yaml --id <notebook-id>
 name: "The case of the failing checkout"
 content:
   defaultTimeframe:
@@ -314,7 +314,7 @@ content:
         ## ⚙️ Behind the scenes
 
         - **Collector** ([contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib), stock components): `groupbytrace` with `emit_strategy: service` releases each call to a service as one batch. `transform` with `shared_cache: true` aggregates over it and writes the `subtrace.*` attributes onto the entry span (`subtrace.is_root_span == true`).
-        - **OpenPipeline** (span pipeline *All spans*) extracts `astroshop.subtrace.calls`, `.failed_calls`, `.db_calls`, `.errors` and `.duration` from entry spans, by `service.name` and `endpoint.name`.
+        - **OpenPipeline** (span pipeline *All spans*) extracts `astroshop.subtrace.calls`, `.failed_calls` and `.db_calls` from entry spans, by `service.name` and `endpoint.name`.
         - **Failure detection:** the ruleset *Astroshop subtrace demo: fail on inner span errors* is ordered before the built-in default.
         - **Filtering:** all demo data carries the primary Grail field `deployment.release_product == "astroshop-subtrace-demo"`.
 

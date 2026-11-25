@@ -1,0 +1,21 @@
+# Subtrace showcase: Dynatrace backend for the OpenTelemetry Demo core services.
+services:
+  otel-collector:
+    environment:
+      - DT_OTLP_ENDPOINT=${DT_OTLP_ENDPOINT:?set DT_OTLP_ENDPOINT}
+      - DT_INGEST_TOKEN=${DT_INGEST_TOKEN:?set DT_INGEST_TOKEN}
+    deploy:
+      resources:
+        limits:
+          memory: 512M  # groupbytrace buffers traces for wait_duration
+  # Upstream limits are too low for these services; they get OOM-killed.
+  ad:
+    deploy: { resources: { limits: { memory: 600M } } }
+  product-catalog:
+    deploy: { resources: { limits: { memory: 128M } } }
+  checkout:
+    deploy: { resources: { limits: { memory: 128M } } }
+  # Browser (Playwright) load leaks memory; HTTP users still exercise every service.
+  load-generator:
+    environment:
+      - LOCUST_BROWSER_TRAFFIC_ENABLED=false
