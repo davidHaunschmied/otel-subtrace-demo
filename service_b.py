@@ -12,6 +12,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import Status, StatusCode
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,15 +64,15 @@ def simulate_db_query(table: str):
 
 
 def process_payment(order_id: str):
-    """Process payment - may fail ~30% of time (exception propagation demo)."""
+    """Process payment - may fail ~30% of time (error status propagation demo)."""
     with tracer.start_as_current_span("process-payment") as span:
         time.sleep(random.uniform(0.02, 0.05))
-        
+
         if random.random() < 0.3:
             exc = PaymentFailedException(random.choice([
                 "insufficient_funds", "card_declined", "fraud_suspected"
             ]))
-            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, f"Payment failed: {exc.reason}"))
             return {"status": "failed", "reason": exc.reason}
         
         return {"status": "success", "transaction_id": f"txn_{random.randint(100000, 999999)}"}

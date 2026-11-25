@@ -1,0 +1,124 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Extras/customization layer for the OTel Collector.
+# Override this file in your fork to add exporters for your own observability backend.
+#
+# This file is intentionally empty. It is always loaded last, giving forks
+# a stable, well-defined seam to customize without touching upstream files.
+#
+# IMPORTANT: The OTel Collector merges config files but REPLACES arrays, not appends.
+# If you want to keep the default observability stack alongside your own exporters,
+# you must explicitly repeat the upstream exporter names in your pipeline definitions.
+#
+# Upstream exporter names (repeat these to keep them active):
+#   traces:  otlp_grpc/jaeger, debug, span_metrics
+#   metrics: otlp_http/prometheus, debug
+#   logs:    opensearch, debug
+#
+# Example:
+#
+# exporters:
+#   otlp_grpc/mybackend:
+#     endpoint: https://ingest.mybackend.com
+#
+# service:
+#   pipelines:
+#     traces:
+#       exporters: [otlp_grpc/jaeger, debug, span_metrics, otlp_grpc/mybackend]  # repeat upstream exporters
+#     metrics:
+#       receivers: [docker_stats, http_check/frontend-proxy, host_metrics, nginx, otlp, redis, postgresql, prometheus/ad, span_metrics, kafkametrics]
+#       exporters: [otlp_http/prometheus, debug, otlp_grpc/mybackend]           # repeat upstream exporters
+#     logs:
+#       exporters: [opensearch, debug, otlp_grpc/mybackend]                     # repeat upstream exporters
+
+# ---------------------------------------------------------------------------
+# Subtrace showcase: summarize every call to a service on the span that
+# entered it, using only stock components.
+#
+#   groupbytrace (emit_strategy: service) releases one batch per call to a
+#   service; transform with shared_cache aggregates over that batch.
+#
+# Attributes set on each call's entry span:
+#   subtrace.is_root_span      true
+#   subtrace.db_call_count     N+1 detection: DB calls made during the call
+#   subtrace.outbound_calls    N+1 detection: outgoing calls per operation
+#   subtrace.error_count       spans in the call with error status
+#   subtrace.error_message     status message of the first failing inner span
+#   subtrace.user.loyalty_level  business context set deep in the call
+# ---------------------------------------------------------------------------
+processors:
+  groupbytrace:
+    wait_duration: 5s
+    num_traces: 100000
+    emit_strategy: service
+
+  transform/summarize_call:
+    error_mode: ignore
+    trace_statements:
+      # Pass 1: collect over every span of the call.
+      - context: span
+        shared_cache: true
+        statements:
+          - set(cache["span_ids"][span.span_id.string], true)
+          # N+1: database calls (stable and legacy DB semconv)
+          - set(cache["db_calls"], 0) where cache["db_calls"] == nil
+          - set(cache["db_calls"], cache["db_calls"] + 1) where span.attributes["db.system.name"] != nil or span.attributes["db.system"] != nil
+          # N+1: other outgoing calls, counted per operation
+          - set(cache["outbound"][span.name], 0) where (span.kind == SPAN_KIND_CLIENT or span.kind == SPAN_KIND_PRODUCER) and span.attributes["db.system.name"] == nil and span.attributes["db.system"] == nil and cache["outbound"][span.name] == nil
+          - set(cache["outbound"][span.name], cache["outbound"][span.name] + 1) where (span.kind == SPAN_KIND_CLIENT or span.kind == SPAN_KIND_PRODUCER) and span.attributes["db.system.name"] == nil and span.attributes["db.system"] == nil
+          # Errors: count all, keep the message of the first failing inner span
+          - set(cache["error_count"], 0) where cache["error_count"] == nil
+          - set(cache["error_count"], cache["error_count"] + 1) where span.status.code == STATUS_CODE_ERROR
+          - set(cache["error_message"], span.status.message) where cache["error_message"] == nil and span.status.code == STATUS_CODE_ERROR and span.status.message != "" and span.kind != SPAN_KIND_SERVER and span.kind != SPAN_KIND_CONSUMER
+          # Business context: first loyalty level seen anywhere in the call
+          - set(cache["loyalty_level"], span.attributes["demo.user_context.loyalty_level"]) where cache["loyalty_level"] == nil and span.attributes["demo.user_context.loyalty_level"] != nil
+
+      # Pass 2: write the summary onto the span that entered the call,
+      # i.e. the one whose parent is not part of this batch.
+      - context: span
+        shared_cache: true
+        conditions:
+          - cache["span_ids"][span.parent_span_id.string] == nil
+        statements:
+          - set(span.attributes["subtrace.is_root_span"], true)
+          - set(span.attributes["subtrace.db_call_count"], cache["db_calls"])
+          - set(span.attributes["subtrace.outbound_calls"], cache["outbound"]) where cache["outbound"] != nil
+          - set(span.attributes["subtrace.error_count"], cache["error_count"])
+          - set(span.attributes["subtrace.error_message"], cache["error_message"]) where cache["error_message"] != nil
+          - set(span.attributes["subtrace.user.loyalty_level"], cache["loyalty_level"]) where cache["loyalty_level"] != nil
+
+  # ---------------------------------------------------------------------------
+  # Dynatrace backend
+  # ---------------------------------------------------------------------------
+  # Primary Grail field, so all demo data can be filtered with one field.
+  resource/release_product:
+    attributes:
+      - key: deployment.release_product
+        value: astroshop-subtrace-demo
+        action: upsert
+
+  # Dynatrace accepts delta temporality only; the SDKs and scrapers emit cumulative.
+  cumulativetodelta:
+
+exporters:
+  otlp_http/dynatrace:
+    endpoint: ${env:DT_OTLP_ENDPOINT}
+    headers:
+      Authorization: "Bearer ${env:DT_INGEST_TOKEN}"
+
+service:
+  pipelines:
+    # Upstream arrays are repeated (they are replaced, not merged).
+    # span_metrics is dropped: Dynatrace derives service metrics from the spans.
+    traces:
+      # transform/summarize_call must directly follow groupbytrace.
+      processors: [resource_detection, memory_limiter, transform/sanitize_spans, gen_ai_normalizer, transform/redact_sensitive_data, redaction, resource/release_product, groupbytrace, transform/summarize_call]
+      exporters: [otlp_http/dynatrace]
+    metrics:
+      receivers: [docker_stats, http_check/frontend-proxy, host_metrics, nginx, otlp, redis, postgresql, prometheus/ad]
+      processors: [resource_detection, memory_limiter, resource/release_product, cumulativetodelta]
+      exporters: [otlp_http/dynatrace]
+    logs:
+      processors: [resource_detection, memory_limiter, transform/sanitize_logs, resource/release_product]
+      exporters: [otlp_http/dynatrace]

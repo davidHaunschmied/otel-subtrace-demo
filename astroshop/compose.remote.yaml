@@ -1,0 +1,71 @@
+# Remote host overlay for a host shared with a load test:
+# - every container runs inside the astroshop.slice systemd slice, which caps
+#   the whole demo and gives it the minimum CPU weight (see astroshop.slice);
+# - health checks run every 5s only while starting, then every 60s: each check
+#   spawns a process (often an interpreter) and its dockerd/containerd/runc cost
+#   is outside the slice;
+# - 2 load-generator users instead of 5.
+x-healthcheck-relaxed: &healthcheck-relaxed
+  interval: 60s
+  start_period: 120s
+  start_interval: 5s
+services:
+  ad:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  astronomy-db:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  cart:
+    cgroup_parent: astroshop.slice
+  checkout:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  currency:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  email:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  flagd:
+    cgroup_parent: astroshop.slice
+  flagd-ui:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  frontend:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  frontend-proxy:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  image-provider:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  load-generator:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+    environment:
+      - LOCUST_USERS=2
+  otel-collector:
+    cgroup_parent: astroshop.slice
+  payment:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  product-catalog:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  quote:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  recommendation:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  shipping:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  telemetry-docs:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed
+  valkey-cart:
+    cgroup_parent: astroshop.slice
+    healthcheck: *healthcheck-relaxed

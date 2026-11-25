@@ -1,0 +1,64 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Extras layer: override this file in your fork to add or modify services
+# for your own observability backend or additional components.
+#
+# This file is intentionally empty. It is always loaded last, giving forks
+# a stable, well-defined seam to customize without touching upstream files.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.full.yaml -f compose.observability.yaml -f compose.extras.yaml up
+#
+# Example: add a service and patch the otel-collector to export to it:
+#
+# services:
+#   my-backend:
+#     image: myvendor/backend:latest
+#     ports:
+#       - "4317"
+#
+#   otel-collector:
+#     depends_on:
+#       my-backend:
+#         condition: service_started
+#
+# Then add your exporter config to src/otel-collector/otelcol-config-extras.yml.
+
+# Subtrace showcase overrides (Dynatrace backend, core demo).
+services:
+  # The latest images exceed the default limits (they were OOM-killed).
+  ad:
+    deploy:
+      resources:
+        limits:
+          memory: 600M
+  product-catalog:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+  checkout:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+  # Dynatrace backend, see src/otel-collector/otelcol-config-extras.yml.
+  # Values come from an extra --env-file that is not committed (it holds the token).
+  # 512M leaves headroom for groupbytrace buffering (observed usage ~170 MiB).
+  otel-collector:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    environment:
+      - DT_OTLP_ENDPOINT=${DT_OTLP_ENDPOINT:?set DT_OTLP_ENDPOINT}
+      - DT_INGEST_TOKEN=${DT_INGEST_TOKEN:?set DT_INGEST_TOKEN}
+  # Browser (Playwright) load leaks memory; HTTP users still exercise every service.
+  load-generator:
+    environment:
+      - LOCUST_BROWSER_TRAFFIC_ENABLED=false
+  # Host port 8080 is taken on the dev laptop; keep 8080 inside the network.
+  frontend-proxy:
+    ports: !override
+      - "8090:8080"

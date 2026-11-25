@@ -1,0 +1,115 @@
+# Dynatrace notebook for the astroshop subtrace showcase.
+#   dtctl create notebook -f astroshop/dynatrace-notebook.yaml
+name: Astroshop subtrace showcase
+content:
+  defaultTimeframe:
+    from: now()-2h
+    to: now()
+  defaultSegments: []
+  sections:
+    - id: fc296d5f-06d2-424a-9871-453c194f708e
+      type: markdown
+      markdown: |-
+        # Astroshop subtrace showcase
+
+        The Collector releases every **call to a service** as one batch (`groupbytrace`, `emit_strategy: service`) and aggregates over it with the `transform` processor (`shared_cache`). The result lands on the span that entered the call (`subtrace.is_root_span == true`).
+
+        All demo data carries `deployment.release_product == "astroshop-subtrace-demo"`.
+
+    - id: 9ad2766f-4887-442c-b656-c7381915e2e0
+      type: markdown
+      markdown: |-
+        ## 🔍 N+1 detection: one product lookup per cart item
+
+        `subtrace.outbound_calls` counts the outgoing calls of each call, per operation. Checkout calls `GetProduct` and `Convert` once per cart item.
+
+    - id: b79e2559-4f4e-4ed2-b338-bc9543593ac0
+      type: dql
+      showTitle: true
+      title: Checkout — outgoing calls per order, by number of product lookups
+      height: 260
+      state:
+        visualization: table
+        input:
+          value: |-
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter service.name == "checkout" and span.name == "oteldemo.CheckoutService/PlaceOrder"
+            | fieldsAdd product_lookups = toLong(subtrace.outbound_calls[`oteldemo.ProductCatalogService/GetProduct`]),
+                        currency_conversions = toLong(subtrace.outbound_calls[`oteldemo.CurrencyService/Convert`])
+            | summarize orders = count(), avg_currency_conversions = avg(currency_conversions), avg_duration = avg(duration), by:{product_lookups}
+            | sort product_lookups asc
+
+    - id: 715c4d73-c8d0-4edd-87bd-084c56a4f90b
+      type: dql
+      showTitle: true
+      title: Database calls per call, by operation
+      height: 300
+      state:
+        visualization: table
+        input:
+          value: |-
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | summarize calls = count(), avg_db_calls = avg(subtrace.db_call_count), max_db_calls = max(subtrace.db_call_count), by:{service.name, span.name}
+            | filter max_db_calls > 0
+            | sort avg_db_calls desc
+
+    - id: ce9c6b04-6058-4c50-985d-c344f8c30009
+      type: markdown
+      markdown: |-
+        ## ⚠️ Error propagation: the inner error message on the entry span
+
+        `subtrace.error_message` is the status message of the first failing span inside the call (the `paymentFailure` flag fails 25% of charges). On checkout the entry span's own status is the wrapped `failed to charge card: …`; the attribute carries the original cause as a field of its own, ready to group by.
+
+    - id: cf2c51ae-b510-47f1-8325-a0e4d3a07c9d
+      type: dql
+      showTitle: true
+      title: Failed calls by propagated error message
+      height: 260
+      state:
+        visualization: table
+        input:
+          value: |-
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter service.name != "load-generator"
+            | filter subtrace.error_count > 0 and isNotNull(subtrace.error_message)
+            | summarize failed_calls = count(), by:{service.name, span.name, entry_span_status = span.status_message, subtrace.error_message}
+            | sort failed_calls desc
+
+    - id: dc17beb5-0b62-4d7e-93ee-bf8b4446f22b
+      type: markdown
+      markdown: |-
+        ## 📊 Business context: loyalty level on the payment entry span
+
+        `subtrace.user.loyalty_level` is copied from payment's inner `charge` span, so the entry span can be sliced by it directly.
+
+    - id: d0cfb66c-2f5f-4467-8dee-c336985e9a84
+      type: dql
+      showTitle: true
+      title: Payments and failure rate by loyalty level
+      height: 240
+      state:
+        visualization: table
+        input:
+          value: |-
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter isNotNull(subtrace.user.loyalty_level)
+            | summarize payments = count(), failed = countIf(subtrace.error_count > 0), by:{subtrace.user.loyalty_level}
+            | fieldsAdd failure_rate_pct = round(100.0 * failed / payments, decimals:1)
+            | sort failure_rate_pct desc
+
+    - id: 53c8dc47-4359-4ca0-9fca-5ccf39baa2c1
+      type: dql
+      showTitle: true
+      title: Ingest check — all signals by release product
+      height: 200
+      state:
+        visualization: table
+        input:
+          value: |-
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo"
+            | summarize spans = count(), entry_spans = countIf(subtrace.is_root_span == true), services = countDistinct(service.name)
