@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "ruleset": {
+    "rulesetName": "Astroshop subtrace demo: fail on inner span errors",
+    "description": "Default failure detection plus: a call fails when any span inside it failed (subtrace.error_count, set by the Collector on the entry span).",
+    "condition": "deployment.release_product == \"astroshop-subtrace-demo\"",
+    "failOnCustomRules": [
+      { "ruleName": "Inner span failed", "dqlCondition": "subtrace.error_count > 0", "enabled": true }
+    ],
+    "failOnExceptions": { "enabled": true, "ignoredExceptions": [] },
+    "failOnGrpcStatusCodes": { "statusCodes": "2,4,12,13,14,15" },
+    "failOnHttpResponseStatusCodes": { "statusCodes": "500-599" },
+    "failOnSpanStatusError": { "enabled": true },
+    "overrides": {
+      "forceSuccessOnExceptions": [],
+      "forceSuccessOnGrpcResponseStatusCodes": {},
+      "forceSuccessOnHttpResponseStatusCodes": {},
+      "forceSuccessOnSpanStatusOk": { "enabled": false },
+      "forceSuccessWithCustomRules": []
+    }
+  }
+}

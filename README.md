@@ -137,7 +137,9 @@ All data carries the resource attribute `deployment.release_product = "astroshop
 | `astroshop.slice` | systemd resource budget for a shared host: 1 CPU on cores 2–3, 3 GiB, minimum CPU and IO weight, so co-located workloads win under contention |
 | `astroshop.sh` | `up` / `down` / `ps` / `logs` wrapper (core services only, no Jaeger/Prometheus/Grafana/OpenSearch; always pulls, since the demo's `latest` tags move) |
 | `install.sh` | checks out the tested demo commit and installs everything above |
-| `dynatrace-notebook.yaml` | Dynatrace notebook with one DQL section per feature: `dtctl create notebook -f astroshop/dynatrace-notebook.yaml` |
+| `openpipeline-span-metrics.json` | OpenPipeline metric extraction processors for the span pipeline: `astroshop.subtrace.calls`, `.failed_calls`, `.db_calls`, `.errors`, `.duration`, each by `service.name` and `endpoint.name` |
+| `failure-detection-ruleset.json` | failure detection ruleset (`builtin:failure-detection-rulesets`): the defaults plus "a call fails if an inner span failed" (`subtrace.error_count > 0`), scoped to `deployment.release_product` |
+| `dynatrace-notebook.yaml` | Dynatrace notebook with DQL sections per feature, on spans and on the extracted metrics by endpoint: `dtctl create notebook -f astroshop/dynatrace-notebook.yaml` |
 
 ```bash
 astroshop/install.sh ~/opentelemetry-demo     # on the target host (systemd, Docker)
@@ -146,6 +148,32 @@ vi ~/opentelemetry-demo/.env.dynatrace        # DT_OTLP_ENDPOINT, DT_INGEST_TOKE
 ```
 
 The shop is then served on port 8090 (`/feature/` toggles feature flags).
+
+Tenant configuration with [dtctl](https://github.com/dynatrace-oss/dtctl):
+
+```bash
+# Metric extraction: add the processors to the span pipeline that receives the demo's spans
+# (here "All spans"; check builtin:openpipeline.spans.routing).
+dtctl get settings --schema builtin:openpipeline.spans.pipelines -o json \
+  | jq --slurpfile p astroshop/openpipeline-span-metrics.json \
+      '.result[] | select(.value.displayName == "All spans")
+       | {objectId, schemaId, scope, value: (.value + {metricExtraction: {processors: $p[0]}})}' > pipeline.json
+dtctl apply -f pipeline.json
+
+# Failure detection: rulesets are ordered and the first match wins. A new object is
+# appended after "[Built-in] Default failure detection" and would never match, so pass
+# insertAfter = objectId of the ruleset listed directly above the default.
+dtctl get settings --schema builtin:failure-detection-rulesets -o json \
+  | jq -r '.result[] | [.objectId, .value.ruleset.rulesetName] | @tsv'
+jq --arg after "<objectId>" \
+  '{schemaId: "builtin:failure-detection-rulesets", scope: "environment", insertAfter: $after, value: .}' \
+  astroshop/failure-detection-ruleset.json > ruleset.json
+dtctl apply -f ruleset.json
+```
+
+If the default is the only ruleset, create it without `insertAfter` and move it above the default in the Settings UI.
+
+The `metricExtraction` stage replaces any existing extraction processors of that pipeline. Merge them if it has some.
 
 ## Development
 
