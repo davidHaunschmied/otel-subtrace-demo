@@ -139,7 +139,7 @@ All data carries the resource attribute `deployment.release_product = "astroshop
 | `install.sh` | checks out the tested demo commit and installs everything above |
 | `openpipeline-span-metrics.json` | OpenPipeline metric extraction processors for the span pipeline: `astroshop.subtrace.calls`, `.failed_calls`, `.db_calls`, `.errors`, `.duration`, each by `service.name` and `endpoint.name` |
 | `failure-detection-ruleset.json` | failure detection ruleset (`builtin:failure-detection-rulesets`): the defaults plus "a call fails if an inner span failed" (`subtrace.error_count > 0`), scoped to `deployment.release_product` |
-| `dynatrace-notebook.yaml` | Dynatrace notebook with DQL sections per feature, on spans and on the extracted metrics by endpoint: `dtctl create notebook -f astroshop/dynatrace-notebook.yaml` |
+| `dynatrace-notebook.yaml` | story notebook "The case of the failing checkout": symptom → root cause → affected customers → N+1, with the endpoint metrics as line charts: `dtctl create notebook -f astroshop/dynatrace-notebook.yaml` |
 
 ```bash
 astroshop/install.sh ~/opentelemetry-demo     # on the target host (systemd, Docker)
