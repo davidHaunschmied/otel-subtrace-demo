@@ -3,6 +3,7 @@
 #   update:  dtctl apply -f dynatrace/notebook.yaml --id <notebook-id>
 name: "The power of service transaction analytics, shown on the OpenTelemetry Astroshop"
 content:
+  version: "7"   # notebook content format; without it the app reset every chart to raw records
   defaultTimeframe:
     from: now()-2h
     to: now()
@@ -40,6 +41,9 @@ content:
 
     - id: b79e2559-4f4e-4ed2-b338-bc9543593ac0
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Failure rate along the checkout path: own status vs. including inner failures"
@@ -82,6 +86,9 @@ content:
 
     - id: e72bed9f-b0c4-49b2-803b-41a3d2c82845
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Failure rate by endpoint (built-in service metrics)"
@@ -130,6 +137,9 @@ content:
 
     - id: cf2c51ae-b510-47f1-8325-a0e4d3a07c9d
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Own status message vs. propagated root cause, per hop"
@@ -156,6 +166,9 @@ content:
 
     - id: f2c570c3-024d-472b-8fe5-a75692d3b724
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Failed orders by root cause (PlaceOrder)"
@@ -191,6 +204,9 @@ content:
 
     - id: d0cfb66c-2f5f-4467-8dee-c336985e9a84
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Payment failure rate by customer loyalty level"
@@ -233,6 +249,9 @@ content:
 
     - id: 97d46f98-9fba-4776-a347-a1fe1b8c760f
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Outgoing calls per order, by cart size"
@@ -271,6 +290,9 @@ content:
 
     - id: 645533ff-1a03-48a4-a28a-ac029fdaacd3
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Database queries per transaction, by endpoint"
@@ -315,6 +337,9 @@ content:
 
     - id: 53c8dc47-4359-4ca0-9fca-5ccf39baa2c1
       type: dql
+      filterSegments: []
+      drilldownPath: []
+      previousFilterSegments: []
       showTitle: true
       showInput: false
       title: "Ingest check"
