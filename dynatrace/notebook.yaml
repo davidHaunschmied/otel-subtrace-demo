@@ -1,7 +1,7 @@
-# Dynatrace notebook for the astroshop subtrace showcase: a story in four chapters.
+# Dynatrace notebook for the Astroshop service transaction showcase: a story in four chapters.
 #   create:  dtctl create notebook -f dynatrace/notebook.yaml
 #   update:  dtctl apply -f dynatrace/notebook.yaml --id <notebook-id>
-name: "The power of subtrace analytics, shown on the OpenTelemetry Astroshop"
+name: "The power of service transaction analytics, shown on the OpenTelemetry Astroshop"
 content:
   defaultTimeframe:
     from: now()-2h
@@ -16,9 +16,9 @@ content:
 
         A shopper clicks **Place order**. Behind that one click, a typical astroshop checkout trace touches **12 services** in **~110 spans**: the proxy, the frontend, checkout, cart, product catalog, currency, payment, shipping, email…
 
-        Classic span analytics answers *"what did this span do?"*. This notebook asks a different question: **"what happened during this call to this service?"** That unit, one call to one service with all its inner spans, is a **subtrace**.
+        Classic span analytics answers *"what did this span do?"*. This notebook asks a different question: **"what happened during this call to this service?"** That unit, one call to one service with all its inner spans, is a **service transaction**.
 
-        The OpenTelemetry Collector summarizes every subtrace onto the span that entered it, Dynatrace's built-in service metrics, plus one failure detection rule, do the rest. Follow the four chapters to see what that reveals:
+        The OpenTelemetry Collector summarizes every service transaction onto the span that entered it, Dynatrace's built-in service metrics, plus one failure detection rule, do the rest. Follow the four chapters to see what that reveals:
 
         1. 🚨 **The symptom:** orders fail, but the shop's front door reports success
         2. 🔎 **The root cause:** every hop tells a different story
@@ -34,9 +34,9 @@ content:
 
         About one in four payments fails (feature flag `paymentFailure`). Payment and checkout mark their spans as errors. But the shop's edge, `frontend-proxy` and `frontend`, only answer **HTTP 422**. By the default rules, a 4xx response isn't a failure, so the endpoint customers actually hit looks healthy.
 
-        The Collector counts failing spans inside each call (`subtrace.error_count`). A failure detection rule then marks a call as failed **when anything inside it failed**:
+        The Collector counts failing spans inside each service transaction (`transaction.error_count`). A failure detection rule then marks a transaction as failed **when anything inside it failed**:
 
-        > *Astroshop subtrace demo: fail on inner span errors* · `subtrace.error_count > 0`
+        > *Astroshop demo: fail service transactions on inner span errors* · `transaction.error_count > 0`
 
     - id: b79e2559-4f4e-4ed2-b338-bc9543593ac0
       type: dql
@@ -53,7 +53,7 @@ content:
               layout: horizontal
               groupMode: grouped
               categoryAxisLabel: Call
-              valueAxisLabel: Failed calls (%)
+              valueAxisLabel: Failed transactions (%)
             legend:
               hidden: false
               position: bottom
@@ -63,13 +63,13 @@ content:
         input:
           value: |-
             fetch spans
-            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter deployment.release_product == "astroshop-subtrace-demo" and transaction.is_root_span == true
             | filter in(endpoint.name, { "POST /api/checkout", "oteldemo.CheckoutService/PlaceOrder", "oteldemo.PaymentService.Charge" })
             | fieldsAdd call = concat(service.name, " · ", endpoint.name),
                         hop = if(service.name == "frontend-proxy", 1, else: if(service.name == "frontend", 2, else: if(service.name == "checkout", 3, else: 4)))
             | summarize { calls = count(),
                           own = countIf(span.status_code == "error" or toLong(http.response.status_code) >= 500),
-                          inner = countIf(subtrace.error_count > 0) }, by:{ call, hop }
+                          inner = countIf(transaction.error_count > 0) }, by:{ call, hop }
             | sort hop asc
             | fields call,
                      `Own status only` = 100.0 * own / calls,
@@ -124,9 +124,9 @@ content:
         | `checkout` | `failed to charge card: could not charge the card: rpc error: …` |
         | `payment` | the actual cause |
 
-        The Collector copies the status message of the **first failing span inside the call** to `subtrace.error_message`. Checkout's entry span now carries payment's original cause, not the wrapped one, as a field of its own, ready to group, filter and alert on. No exception parsing, no trace walking.
+        The Collector copies the status message of the **first failing span inside the transaction** to `transaction.error_message`. Checkout's entry span now carries payment's original cause, not the wrapped one, as a field of its own, ready to group, filter and alert on. No exception parsing, no trace walking.
 
-        A subtrace can only lift what its own spans know. At the edge, frontend's gRPC client span records the failure as status code 13 without a message, so `subtrace.error_message` stays empty there. The failure still counts (`subtrace.error_count`, chapter 1).
+        A service transaction can only lift what its own spans know. At the edge, frontend's gRPC client span records the failure as status code 13 without a message, so `transaction.error_message` stays empty there. The failure still counts (`transaction.error_count`, chapter 1).
 
     - id: cf2c51ae-b510-47f1-8325-a0e4d3a07c9d
       type: dql
@@ -139,13 +139,13 @@ content:
         input:
           value: |-
             fetch spans
-            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter deployment.release_product == "astroshop-subtrace-demo" and transaction.is_root_span == true
             | filter in(endpoint.name, { "POST /api/checkout", "oteldemo.CheckoutService/PlaceOrder", "oteldemo.PaymentService.Charge" })
-            | filter subtrace.error_count > 0
+            | filter transaction.error_count > 0
             | fieldsAdd hop = if(service.name == "frontend-proxy", 1, else: if(service.name == "frontend", 2, else: if(service.name == "checkout", 3, else: 4)))
-            | summarize { `Failed calls` = count() }, by:{ hop, Service = service.name, Endpoint = endpoint.name,
+            | summarize { `Failed transactions` = count() }, by:{ hop, Service = service.name, Endpoint = endpoint.name,
                                                        `Own status message` = coalesce(span.status_message, concat("HTTP ", toString(http.response.status_code))),
-                                                       `subtrace.error_message` = subtrace.error_message }
+                                                       `transaction.error_message` = transaction.error_message }
             | sort hop asc
             | fieldsRemove hop
 
@@ -174,9 +174,9 @@ content:
         input:
           value: |-
             fetch spans
-            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
-            | filter endpoint.name == "oteldemo.CheckoutService/PlaceOrder" and subtrace.error_count > 0
-            | makeTimeseries failed_orders = count(), by:{ subtrace.error_message }, interval: 10m
+            | filter deployment.release_product == "astroshop-subtrace-demo" and transaction.is_root_span == true
+            | filter endpoint.name == "oteldemo.CheckoutService/PlaceOrder" and transaction.error_count > 0
+            | makeTimeseries failed_orders = count(), by:{ transaction.error_message }, interval: 10m
 
     # ── Chapter 3: impact ─────────────────────────────────────────────────
     - id: dc17beb5-0b62-4d7e-93ee-bf8b4446f22b
@@ -185,7 +185,7 @@ content:
         ---
         ## 👤 Chapter 3 — Who is affected?
 
-        The root cause above mentions a loyalty level, and that's not a coincidence. Payment's inner `charge` span knows the customer's loyalty level (`demo.user_context.loyalty_level`). The Collector lifts it onto the payment entry span as `subtrace.user.loyalty_level`, so calls can be split by it directly.
+        The root cause above mentions a loyalty level, and that's not a coincidence. Payment's inner `charge` span knows the customer's loyalty level (`demo.user_context.loyalty_level`). The Collector lifts it onto the payment entry span as `transaction.user.loyalty_level`, so payment transactions can be split by it directly.
 
         One line stands out from the flat ones:
 
@@ -211,11 +211,11 @@ content:
         input:
           value: |-
             fetch spans
-            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
-            | filter endpoint.name == "oteldemo.PaymentService.Charge" and isNotNull(subtrace.user.loyalty_level)
-            | makeTimeseries { calls = count(), failed = countIf(subtrace.error_count > 0) }, by:{ subtrace.user.loyalty_level }, interval: 10m
+            | filter deployment.release_product == "astroshop-subtrace-demo" and transaction.is_root_span == true
+            | filter endpoint.name == "oteldemo.PaymentService.Charge" and isNotNull(transaction.user.loyalty_level)
+            | makeTimeseries { calls = count(), failed = countIf(transaction.error_count > 0) }, by:{ transaction.user.loyalty_level }, interval: 10m
             | fieldsAdd failure_rate = 100.0 * failed[] / calls[]
-            | fields timeframe, interval, subtrace.user.loyalty_level, failure_rate
+            | fields timeframe, interval, transaction.user.loyalty_level, failure_rate
 
     - id: 5da1cf82-3a8a-4fc7-a8fb-cc5ec4723a45
       type: markdown
@@ -229,7 +229,7 @@ content:
         ---
         ## 🐢 Chapter 4 — A second finding: big carts fan out
 
-        While we're here: how does checkout talk to its dependencies? The Collector counts each call's outgoing calls per operation (`subtrace.outbound_calls`). Grouping orders by cart size shows checkout calls `GetProduct` **once per item** and `Convert` **once per item plus shipping**, instead of batching. That's the classic N+1 pattern, now visible without opening a single trace.
+        While we're here: how does checkout talk to its dependencies? The Collector counts each transaction's outgoing calls per operation (`transaction.outbound_calls`). Grouping orders by cart size shows checkout calls `GetProduct` **once per item** and `Convert` **once per item plus shipping**, instead of batching. That's the classic N+1 pattern, now visible without opening a single trace.
 
     - id: 97d46f98-9fba-4776-a347-a1fe1b8c760f
       type: dql
@@ -253,13 +253,13 @@ content:
         input:
           value: |-
             fetch spans
-            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter deployment.release_product == "astroshop-subtrace-demo" and transaction.is_root_span == true
             | filter endpoint.name == "oteldemo.CheckoutService/PlaceOrder"
-            | fieldsAdd items = toLong(subtrace.outbound_calls[`oteldemo.ProductCatalogService/GetProduct`])
+            | fieldsAdd items = toLong(transaction.outbound_calls[`oteldemo.ProductCatalogService/GetProduct`])
             | filter isNotNull(items)
             | summarize { orders = count(),
-                          `GetProduct calls` = avg(toLong(subtrace.outbound_calls[`oteldemo.ProductCatalogService/GetProduct`])),
-                          `Convert calls` = avg(toLong(subtrace.outbound_calls[`oteldemo.CurrencyService/Convert`])) }, by:{ items }
+                          `GetProduct calls` = avg(toLong(transaction.outbound_calls[`oteldemo.ProductCatalogService/GetProduct`])),
+                          `Convert calls` = avg(toLong(transaction.outbound_calls[`oteldemo.CurrencyService/Convert`])) }, by:{ items }
             | sort items asc
             | fieldsAdd `Cart size` = concat(toString(items), if(items == 1, " item", else: " items"), " (", toString(orders), " orders)")
             | fields `Cart size`, `GetProduct calls`, `Convert calls`
@@ -267,13 +267,13 @@ content:
     - id: 353e9f3d-8077-4100-b19e-3b3b1f72ad35
       type: markdown
       markdown: |-
-        Each of those `GetProduct` calls is itself a subtrace in product-catalog, with its own database call count (`subtrace.db_call_count`). One query per call means **N cart items = N database queries**: the N+1 pattern spans two services. Any endpoint whose line climbs here issues more queries per call than before.
+        Each of those `GetProduct` calls is itself a service transaction in product-catalog, with its own database call count (`transaction.db_call_count`). One query per call means **N cart items = N database queries**: the N+1 pattern spans two services. Any endpoint whose line climbs here issues more queries per transaction than before.
 
     - id: 645533ff-1a03-48a4-a28a-ac029fdaacd3
       type: dql
       showTitle: true
       showInput: false
-      title: "Database queries per call, by endpoint"
+      title: "Database queries per transaction, by endpoint"
       height: 300
       state:
         visualization: lineChart
@@ -289,9 +289,9 @@ content:
         input:
           value: |-
             fetch spans
-            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true and isNotNull(endpoint.name)
-            | makeTimeseries db_queries_per_call = avg(subtrace.db_call_count), by:{ endpoint.name }, interval: 10m
-            | filter arrayMax(db_queries_per_call) > 0
+            | filter deployment.release_product == "astroshop-subtrace-demo" and transaction.is_root_span == true and isNotNull(endpoint.name)
+            | makeTimeseries db_queries_per_transaction = avg(transaction.db_call_count), by:{ endpoint.name }, interval: 10m
+            | filter arrayMax(db_queries_per_transaction) > 0
 
     # ── Wrap-up ───────────────────────────────────────────────────────────
     - id: f2dc94ac-fe30-4eff-81ca-deeefe9f5ce4
@@ -302,15 +302,15 @@ content:
 
         | Question | Answer | Signal |
         |---|---|---|
-        | Is checkout failing? | Yes, end to end, including the edge | failure rule on `subtrace.error_count` |
-        | Why? | The payment token is rejected | `subtrace.error_message` |
-        | Who is hit? | Gold customers only | `subtrace.user.loyalty_level` |
-        | Anything else? | Checkout fans out per cart item | `subtrace.outbound_calls`, `subtrace.db_call_count` |
+        | Is checkout failing? | Yes, end to end, including the edge | failure rule on `transaction.error_count` |
+        | Why? | The payment token is rejected | `transaction.error_message` |
+        | Who is hit? | Gold customers only | `transaction.user.loyalty_level` |
+        | Anything else? | Checkout fans out per cart item | `transaction.outbound_calls`, `transaction.db_call_count` |
 
         ## ⚙️ Behind the scenes
 
-        - **Collector** ([contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib), stock components): `groupbytrace` with `emit_strategy: service` releases each call to a service as one batch. `transform` with `shared_cache: true` aggregates over it and writes the `subtrace.*` attributes onto the entry span (`subtrace.is_root_span == true`).
-        - **Failure detection:** the ruleset *Astroshop subtrace demo: fail on inner span errors* (`subtrace.error_count > 0`), ordered before the built-in default. It makes the built-in `dt.service.request.*` metrics count inner failures per endpoint. No metric extraction is needed.
+        - **Collector** ([contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib), stock components): `groupbytrace` with `emit_strategy: service` releases each service transaction as one batch. `transform` with `shared_cache: true` aggregates over it and writes the `transaction.*` attributes onto the entry span (`transaction.is_root_span == true`).
+        - **Failure detection:** the ruleset *Astroshop demo: fail service transactions on inner span errors* (`transaction.error_count > 0`), ordered before the built-in default. It makes the built-in `dt.service.request.*` metrics count inner failures per endpoint. No metric extraction is needed.
         - **Filtering:** all demo data carries the primary Grail field `deployment.release_product == "astroshop-subtrace-demo"`.
 
     - id: 53c8dc47-4359-4ca0-9fca-5ccf39baa2c1
@@ -325,4 +325,4 @@ content:
           value: |-
             fetch spans
             | filter deployment.release_product == "astroshop-subtrace-demo"
-            | summarize { Spans = count(), `Entry spans (subtraces)` = countIf(subtrace.is_root_span == true), Services = countDistinct(service.name) }
+            | summarize { Spans = count(), `Entry spans (service transactions)` = countIf(transaction.is_root_span == true), Services = countDistinct(service.name) }
