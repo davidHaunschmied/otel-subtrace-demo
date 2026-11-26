@@ -1,7 +1,7 @@
 # Dynatrace notebook for the astroshop subtrace showcase: a story in four chapters.
 #   create:  dtctl create notebook -f dynatrace/notebook.yaml
 #   update:  dtctl apply -f dynatrace/notebook.yaml --id <notebook-id>
-name: "The case of the failing checkout"
+name: "The power of subtrace analytics, shown on the OpenTelemetry Astroshop"
 content:
   defaultTimeframe:
     from: now()-2h

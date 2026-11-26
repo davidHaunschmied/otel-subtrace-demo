@@ -13,7 +13,7 @@ No custom Collector component is needed. This repo is a configuration for the [O
 | [`opentelemetry-demo/src/otel-collector/otelcol-config-extras.yml`](opentelemetry-demo/src/otel-collector/otelcol-config-extras.yml) | the subtrace recipe; Dynatrace export |
 | [`opentelemetry-demo/compose.extras.yaml`](opentelemetry-demo/compose.extras.yaml) | Dynatrace credentials; memory limits and disabled browser load so the demo runs stably |
 | [`dynatrace/failure-detection-ruleset.json`](dynatrace/failure-detection-ruleset.json) | a call fails when any span inside it failed, so built-in `dt.service.request.*` metrics are right per endpoint |
-| [`dynatrace/notebook.yaml`](dynatrace/notebook.yaml) | story notebook *The case of the failing checkout* |
+| [`dynatrace/notebook.yaml`](dynatrace/notebook.yaml) | story notebook *The power of subtrace analytics, shown on the OpenTelemetry Astroshop* |
 
 ## The recipe
 
