@@ -1,4 +1,4 @@
-# Subtrace analytics with stock OpenTelemetry
+# The power of subtrace analytics, shown on the OpenTelemetry Astronomy Shop
 
 A **subtrace** is one call to one service within a trace, i.e. the span that entered the service plus everything it did before returning. Summarizing each subtrace onto its entry span answers questions that per-span analytics can't:
 
