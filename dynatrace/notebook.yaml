@@ -18,7 +18,7 @@ content:
 
         Classic span analytics answers *"what did this span do?"*. This notebook asks a different question: **"what happened during this call to this service?"** That unit, one call to one service with all its inner spans, is a **subtrace**.
 
-        The OpenTelemetry Collector summarizes every subtrace onto the span that entered it, and Dynatrace turns those summaries into metrics per endpoint. Follow the four chapters to see what that reveals:
+        The OpenTelemetry Collector summarizes every subtrace onto the span that entered it, Dynatrace's built-in service metrics, plus one failure detection rule, do the rest. Follow the four chapters to see what that reveals:
 
         1. 🚨 **The symptom:** orders fail, but the shop's front door reports success
         2. 🔎 **The root cause:** every hop tells a different story
@@ -152,7 +152,7 @@ content:
     - id: ad58bb8b-c238-4a01-834e-30014c081066
       type: markdown
       markdown: |-
-        Because it's a field, it's also a metric dimension. OpenPipeline counts failed calls by root cause (`astroshop.subtrace.failed_calls`), so failed orders can be charted by *why* they failed:
+        Because it's a field, failed orders can be charted by *why* they failed:
 
     - id: f2c570c3-024d-472b-8fe5-a75692d3b724
       type: dql
@@ -173,10 +173,10 @@ content:
               position: bottom
         input:
           value: |-
-            timeseries failed_orders = sum(astroshop.subtrace.failed_calls),
-              by:{ subtrace.error_message },
-              filter: deployment.release_product == "astroshop-subtrace-demo" and endpoint.name == "oteldemo.CheckoutService/PlaceOrder",
-              interval: 10m
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter endpoint.name == "oteldemo.CheckoutService/PlaceOrder" and subtrace.error_count > 0
+            | makeTimeseries failed_orders = count(), by:{ subtrace.error_message }, interval: 10m
 
     # ── Chapter 3: impact ─────────────────────────────────────────────────
     - id: dc17beb5-0b62-4d7e-93ee-bf8b4446f22b
@@ -185,7 +185,7 @@ content:
         ---
         ## 👤 Chapter 3 — Who is affected?
 
-        The root cause above mentions a loyalty level, and that's not a coincidence. Payment's inner `charge` span knows the customer's loyalty level (`demo.user_context.loyalty_level`). The Collector lifts it onto the payment entry span as `subtrace.user.loyalty_level`, and OpenPipeline keeps it as a metric dimension.
+        The root cause above mentions a loyalty level, and that's not a coincidence. Payment's inner `charge` span knows the customer's loyalty level (`demo.user_context.loyalty_level`). The Collector lifts it onto the payment entry span as `subtrace.user.loyalty_level`, so calls can be split by it directly.
 
         One line stands out from the flat ones:
 
@@ -210,12 +210,11 @@ content:
             - { identifier: failure_rate, unitCategory: percentage, baseUnit: percent, decimals: 0, suffix: "", delimiter: false }
         input:
           value: |-
-            timeseries { calls = sum(astroshop.subtrace.calls), failed = sum(astroshop.subtrace.failed_calls) },
-              by:{ subtrace.user.loyalty_level },
-              filter: deployment.release_product == "astroshop-subtrace-demo"
-                and endpoint.name == "oteldemo.PaymentService.Charge" and isNotNull(subtrace.user.loyalty_level),
-              interval: 10m, union: true
-            | fieldsAdd failure_rate = 100.0 * coalesce(failed[], 0) / calls[]
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true
+            | filter endpoint.name == "oteldemo.PaymentService.Charge" and isNotNull(subtrace.user.loyalty_level)
+            | makeTimeseries { calls = count(), failed = countIf(subtrace.error_count > 0) }, by:{ subtrace.user.loyalty_level }, interval: 10m
+            | fieldsAdd failure_rate = 100.0 * failed[] / calls[]
             | fields timeframe, interval, subtrace.user.loyalty_level, failure_rate
 
     - id: 5da1cf82-3a8a-4fc7-a8fb-cc5ec4723a45
@@ -268,7 +267,7 @@ content:
     - id: 353e9f3d-8077-4100-b19e-3b3b1f72ad35
       type: markdown
       markdown: |-
-        Each of those `GetProduct` calls is itself a subtrace in product-catalog, with its own database call count (`subtrace.db_call_count` → `astroshop.subtrace.db_calls`). One query per call means **N cart items = N database queries**: the N+1 pattern spans two services. Any endpoint whose line climbs here issues more queries per call than before.
+        Each of those `GetProduct` calls is itself a subtrace in product-catalog, with its own database call count (`subtrace.db_call_count`). One query per call means **N cart items = N database queries**: the N+1 pattern spans two services. Any endpoint whose line climbs here issues more queries per call than before.
 
     - id: 645533ff-1a03-48a4-a28a-ac029fdaacd3
       type: dql
@@ -289,13 +288,10 @@ content:
               position: bottom
         input:
           value: |-
-            timeseries { db_calls = sum(astroshop.subtrace.db_calls), calls = sum(astroshop.subtrace.calls) },
-              by:{ endpoint.name },
-              filter: deployment.release_product == "astroshop-subtrace-demo",
-              interval: 10m
-            | filter arraySum(db_calls) > 0
-            | fieldsAdd db_queries_per_call = db_calls[] / calls[]
-            | fields timeframe, interval, endpoint.name, db_queries_per_call
+            fetch spans
+            | filter deployment.release_product == "astroshop-subtrace-demo" and subtrace.is_root_span == true and isNotNull(endpoint.name)
+            | makeTimeseries db_queries_per_call = avg(subtrace.db_call_count), by:{ endpoint.name }, interval: 10m
+            | filter arrayMax(db_queries_per_call) > 0
 
     # ── Wrap-up ───────────────────────────────────────────────────────────
     - id: f2dc94ac-fe30-4eff-81ca-deeefe9f5ce4
@@ -314,8 +310,7 @@ content:
         ## ⚙️ Behind the scenes
 
         - **Collector** ([contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib), stock components): `groupbytrace` with `emit_strategy: service` releases each call to a service as one batch. `transform` with `shared_cache: true` aggregates over it and writes the `subtrace.*` attributes onto the entry span (`subtrace.is_root_span == true`).
-        - **OpenPipeline** (span pipeline *All spans*) extracts `astroshop.subtrace.calls`, `.failed_calls` and `.db_calls` from entry spans, by `service.name` and `endpoint.name`.
-        - **Failure detection:** the ruleset *Astroshop subtrace demo: fail on inner span errors* is ordered before the built-in default.
+        - **Failure detection:** the ruleset *Astroshop subtrace demo: fail on inner span errors* (`subtrace.error_count > 0`), ordered before the built-in default. It makes the built-in `dt.service.request.*` metrics count inner failures per endpoint. No metric extraction is needed.
         - **Filtering:** all demo data carries the primary Grail field `deployment.release_product == "astroshop-subtrace-demo"`.
 
     - id: 53c8dc47-4359-4ca0-9fca-5ccf39baa2c1

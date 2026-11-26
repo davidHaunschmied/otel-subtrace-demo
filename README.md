@@ -6,14 +6,13 @@ A **subtrace** is one call to one service within a trace, i.e. the span that ent
 - **⚠️ Error propagation:** which inner span failed, and with what status message?
 - **📊 Business context:** which customer segment did this call serve?
 
-No custom Collector component is needed. This repo is a configuration for the [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo) (astroshop) using two stock [contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib) processors, plus a Dynatrace setup that turns the summaries into metrics per endpoint.
+No custom Collector component is needed. This repo is a configuration for the [OpenTelemetry Demo](https://github.com/open-telemetry/opentelemetry-demo) (astroshop) using two stock [contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib) processors, plus a Dynatrace setup: one failure detection rule makes the built-in service metrics count inner failures per endpoint, and a notebook tells the story.
 
 | File | What it adds |
 |---|---|
 | [`opentelemetry-demo/src/otel-collector/otelcol-config-extras.yml`](opentelemetry-demo/src/otel-collector/otelcol-config-extras.yml) | the subtrace recipe; Dynatrace export |
 | [`opentelemetry-demo/compose.extras.yaml`](opentelemetry-demo/compose.extras.yaml) | Dynatrace credentials; memory limits and disabled browser load so the demo runs stably |
-| [`dynatrace/openpipeline-span-metrics.json`](dynatrace/openpipeline-span-metrics.json) | OpenPipeline metric extraction by `endpoint.name` |
-| [`dynatrace/failure-detection-ruleset.json`](dynatrace/failure-detection-ruleset.json) | a call fails when any span inside it failed |
+| [`dynatrace/failure-detection-ruleset.json`](dynatrace/failure-detection-ruleset.json) | a call fails when any span inside it failed, so built-in `dt.service.request.*` metrics are right per endpoint |
 | [`dynatrace/notebook.yaml`](dynatrace/notebook.yaml) | story notebook *The case of the failing checkout* |
 
 ## The recipe
@@ -79,16 +78,7 @@ All data carries `deployment.release_product = "astroshop-subtrace-demo"`, a pri
 With [dtctl](https://github.com/dynatrace-oss/dtctl), from this repo:
 
 ```bash
-# 1. Metric extraction: astroshop.subtrace.calls, .failed_calls, .db_calls by service.name and endpoint.name.
-#    Add the processors to the span pipeline the demo's spans are routed to (here "All spans").
-#    This replaces the pipeline's existing metric extraction processors; merge if it has any.
-dtctl get settings --schema builtin:openpipeline.spans.pipelines -o json \
-  | jq --slurpfile p dynatrace/openpipeline-span-metrics.json \
-      '.result[] | select(.value.displayName == "All spans")
-       | {objectId, schemaId, scope, value: (.value + {metricExtraction: {processors: $p[0]}})}' > pipeline.json
-dtctl apply -f pipeline.json
-
-# 2. Failure detection: rulesets are ordered, first match wins. A new one is appended after
+# 1. Failure detection: rulesets are ordered, first match wins. A new one is appended after
 #    "[Built-in] Default failure detection" and would never match, so insert it above:
 #    insertAfter = objectId of the ruleset directly above the default (if the default is
 #    first, create it and move it up in the Settings UI).
@@ -99,8 +89,8 @@ jq --arg after "<objectId>" \
   dynatrace/failure-detection-ruleset.json > ruleset.json
 dtctl apply -f ruleset.json
 
-# 3. Notebook
+# 2. Notebook
 dtctl create notebook -f dynatrace/notebook.yaml
 ```
 
-The failure rule matters because the shop's edge answers failed orders with HTTP 422, which the default rules treat as success. With `subtrace.error_count > 0`, the built-in `dt.service.request.failure_count` fails the edge endpoint too.
+No metric extraction is needed. The shop's edge answers failed orders with HTTP 422, which the default rules treat as success. With `subtrace.error_count > 0`, the built-in `dt.service.request.failure_count` fails the edge endpoint too. Segment-level views (loyalty level, DB calls per call) query the entry spans directly.
