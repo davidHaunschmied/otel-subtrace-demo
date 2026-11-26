@@ -2,10 +2,10 @@
   "enabled": true,
   "ruleset": {
     "rulesetName": "Astroshop demo: fail service transactions on inner span errors",
-    "description": "Default failure detection plus: a call fails when any span inside it failed (transaction.error_count, set by the Collector on the entry span).",
+    "description": "Default failure detection plus: a call fails when any span inside it failed (service_transaction.error_count, set by the Collector on the entry span).",
     "condition": "deployment.release_product == \"astroshop-subtrace-demo\"",
     "failOnCustomRules": [
-      { "ruleName": "Inner span failed", "dqlCondition": "transaction.error_count > 0", "enabled": true }
+      { "ruleName": "Inner span failed", "dqlCondition": "service_transaction.error_count > 0", "enabled": true }
     ],
     "failOnExceptions": { "enabled": true, "ignoredExceptions": [] },
     "failOnGrpcStatusCodes": { "statusCodes": "2,4,12,13,14,15" },

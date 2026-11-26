@@ -1,4 +1,4 @@
-# Service transaction showcase: Dynatrace backend for the OpenTelemetry Demo core services.
+# Subtrace showcase: Dynatrace backend for the OpenTelemetry Demo core services.
 services:
   otel-collector:
     environment:

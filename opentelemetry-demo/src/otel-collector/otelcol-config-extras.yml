@@ -1,17 +1,17 @@
 # ---------------------------------------------------------------------------
-# Service transaction showcase: summarize every call to a service (a service
-# transaction) on the span that entered it, using only stock components.
+# Subtrace showcase: summarize every call to a service (a subtrace) on the
+# span that entered it, using only stock components.
 #
-#   groupbytrace (emit_strategy: service) releases one batch per service
-#   transaction; transform with shared_cache aggregates over that batch.
+#   groupbytrace (emit_strategy: service) releases one batch per
+#   subtrace; transform with shared_cache aggregates over that batch.
 #
-# Transaction attributes, set on each entry span:
-#   transaction.is_root_span      true
-#   transaction.db_call_count     N+1 detection: DB calls made during the transaction
-#   transaction.outbound_calls    N+1 detection: outgoing calls per operation
-#   transaction.error_count       spans in the transaction with error status
-#   transaction.error_message     status message of the first failing inner span
-#   transaction.user.loyalty_level  business context set deep in the transaction
+# Service transaction attributes, set on each subtrace's entry span:
+#   service_transaction.is_root_span         true
+#   service_transaction.db_call_count        N+1 detection: DB calls made during the subtrace
+#   service_transaction.outbound_calls       N+1 detection: outgoing calls per operation
+#   service_transaction.error_count          spans in the subtrace with error status
+#   service_transaction.error_message        status message of the first failing inner span
+#   service_transaction.user.loyalty_level   business context set deep in the subtrace
 # ---------------------------------------------------------------------------
 processors:
   groupbytrace:
@@ -19,10 +19,10 @@ processors:
     num_traces: 100000
     emit_strategy: service
 
-  transform/summarize_transaction:
+  transform/summarize_subtrace:
     error_mode: ignore
     trace_statements:
-      # Pass 1: collect over every span of the transaction.
+      # Pass 1: collect over every span of the subtrace.
       - context: span
         shared_cache: true
         statements:
@@ -37,22 +37,22 @@ processors:
           - set(cache["error_count"], 0) where cache["error_count"] == nil
           - set(cache["error_count"], cache["error_count"] + 1) where span.status.code == STATUS_CODE_ERROR
           - set(cache["error_message"], span.status.message) where cache["error_message"] == nil and span.status.code == STATUS_CODE_ERROR and span.status.message != "" and span.kind != SPAN_KIND_SERVER and span.kind != SPAN_KIND_CONSUMER
-          # Business context: first loyalty level seen anywhere in the transaction
+          # Business context: first loyalty level seen anywhere in the subtrace
           - set(cache["loyalty_level"], span.attributes["demo.user_context.loyalty_level"]) where cache["loyalty_level"] == nil and span.attributes["demo.user_context.loyalty_level"] != nil
 
-      # Pass 2: write the summary onto the span that entered the transaction,
+      # Pass 2: write the summary onto the span that entered the subtrace,
       # i.e. the one whose parent is not part of this batch.
       - context: span
         shared_cache: true
         conditions:
           - cache["span_ids"][span.parent_span_id.string] == nil
         statements:
-          - set(span.attributes["transaction.is_root_span"], true)
-          - set(span.attributes["transaction.db_call_count"], cache["db_calls"])
-          - set(span.attributes["transaction.outbound_calls"], cache["outbound"]) where cache["outbound"] != nil
-          - set(span.attributes["transaction.error_count"], cache["error_count"])
-          - set(span.attributes["transaction.error_message"], cache["error_message"]) where cache["error_message"] != nil
-          - set(span.attributes["transaction.user.loyalty_level"], cache["loyalty_level"]) where cache["loyalty_level"] != nil
+          - set(span.attributes["service_transaction.is_root_span"], true)
+          - set(span.attributes["service_transaction.db_call_count"], cache["db_calls"])
+          - set(span.attributes["service_transaction.outbound_calls"], cache["outbound"]) where cache["outbound"] != nil
+          - set(span.attributes["service_transaction.error_count"], cache["error_count"])
+          - set(span.attributes["service_transaction.error_message"], cache["error_message"]) where cache["error_message"] != nil
+          - set(span.attributes["service_transaction.user.loyalty_level"], cache["loyalty_level"]) where cache["loyalty_level"] != nil
 
   # ---------------------------------------------------------------------------
   # Dynatrace backend
@@ -78,8 +78,8 @@ service:
     # Upstream arrays are repeated (they are replaced, not merged).
     # span_metrics is dropped: Dynatrace derives service metrics from the spans.
     traces:
-      # transform/summarize_transaction must directly follow groupbytrace.
-      processors: [resource_detection, memory_limiter, transform/sanitize_spans, gen_ai_normalizer, transform/redact_sensitive_data, redaction, resource/release_product, groupbytrace, transform/summarize_transaction]
+      # transform/summarize_subtrace must directly follow groupbytrace.
+      processors: [resource_detection, memory_limiter, transform/sanitize_spans, gen_ai_normalizer, transform/redact_sensitive_data, redaction, resource/release_product, groupbytrace, transform/summarize_subtrace]
       exporters: [otlp_http/dynatrace]
     metrics:
       receivers: [docker_stats, http_check/frontend-proxy, host_metrics, nginx, otlp, redis, postgresql, prometheus/ad]
